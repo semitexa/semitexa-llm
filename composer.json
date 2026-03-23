@@ -1,6 +1,7 @@
 {
     "name": "semitexa/llm",
-    "description": "Self-hosted LLM assistant for Semitexa Framework — console-based skill execution",
+    "description": "Self-hosted LLM assistant for Semitexa Framework \u2014 console-based skill execution",
+    "tag": "semitexa, llm, assistant, console, skill-execution",
     "version": "1.0.0",
     "type": "library",
     "license": "MIT",
@@ -26,5 +27,12 @@
         "psr-4": {
             "Semitexa\\Llm\\Tests\\": "tests/"
         }
-    }
+    },
+    "keywords": [
+        "semitexa",
+        "llm",
+        "ai",
+        "assistant",
+        "skills"
+    ]
 }
