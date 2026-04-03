@@ -1,4 +1,4 @@
-# semitexa/llm
+# Semitexa LLM
 
 Self-hosted LLM assistant with console-based skill discovery and execution.
 
