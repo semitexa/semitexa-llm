@@ -16,12 +16,12 @@ use Symfony\Component\Console\Command\Command;
 final class SkillRegistry
 {
     public function __construct(
-        private readonly ClassDiscovery $classDiscovery,
+        private ?ClassDiscovery $classDiscovery = null,
     ) {}
 
     public function buildManifest(): SkillManifest
     {
-        $classes = $this->classDiscovery->findClassesWithAttribute(AsAiSkill::class);
+        $classes = $this->classDiscovery()->findClassesWithAttribute(AsAiSkill::class);
         return $this->buildManifestFromClasses($classes);
     }
 
@@ -152,5 +152,10 @@ final class SkillRegistry
         } catch (\Throwable) {
             return [];
         }
+    }
+
+    private function classDiscovery(): ClassDiscovery
+    {
+        return $this->classDiscovery ??= new ClassDiscovery();
     }
 }
