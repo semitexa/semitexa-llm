@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Tests\Unit\Registry;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Core\Attributes\AsCommand;
+use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Llm\Attributes\AsAiSkill;
 use Semitexa\Llm\Policy\AiConfirmationMode;
 use Semitexa\Llm\Policy\AiRiskLevel;

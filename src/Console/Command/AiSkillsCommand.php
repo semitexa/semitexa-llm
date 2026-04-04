@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Console\Command;
 
-use Semitexa\Core\Attributes\AsCommand;
+use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Llm\Registry\SkillRegistry;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
