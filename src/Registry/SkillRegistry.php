@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Registry;
 
 use ReflectionClass;
-use Semitexa\Core\Attributes\AsCommand;
+use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Llm\Attributes\AsAiSkill;
 use Semitexa\Llm\Data\SkillEntry;
@@ -15,9 +15,13 @@ use Symfony\Component\Console\Command\Command;
 
 final class SkillRegistry
 {
+    public function __construct(
+        private readonly ClassDiscovery $classDiscovery,
+    ) {}
+
     public function buildManifest(): SkillManifest
     {
-        $classes = ClassDiscovery::findClassesWithAttribute(AsAiSkill::class);
+        $classes = $this->classDiscovery->findClassesWithAttribute(AsAiSkill::class);
         return $this->buildManifestFromClasses($classes);
     }
 
