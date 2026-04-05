@@ -1,7 +1,7 @@
 {
   "name": "semitexa/llm",
   "description": "Self-hosted LLM assistant for Semitexa Framework — console-based skill execution",
-  "type": "library",
+  "type": "semitexa-module",
   "license": "MIT",
   "authors": [
     {

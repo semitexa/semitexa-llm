@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
-use Semitexa\Llm\Configuration\LlmConfig;
 use Semitexa\Llm\Contract\LlmProviderInterface;
 use Semitexa\Llm\Data\LlmRequest;
 use Semitexa\Llm\Data\LlmResponse;
@@ -16,7 +15,6 @@ use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Executor\SkillExecutor;
 use Semitexa\Llm\Planner\Planner;
 use Semitexa\Llm\Policy\AiConfirmationMode;
-use Semitexa\Llm\Provider\ProviderFactory;
 use Semitexa\Llm\Registry\SkillRegistry;
 use Semitexa\Llm\Session\ConversationSession;
 use Symfony\Component\Console\Application;
@@ -29,34 +27,37 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'ai', description: 'Start an interactive AI assistant backed by a local LLM. Uses skills defined with #[AsAiSkill].')]
 final class AiAssistantCommand extends Command
 {
-    private LlmProviderInterface $provider;
+    public function __construct(
+        private readonly LlmProviderInterface $provider,
+    ) {
+        parent::__construct();
+    }
 
     protected function configure(): void
     {
         $this
             ->setName('ai')
             ->setDescription('Start an interactive AI assistant backed by a local LLM. Uses skills defined with #[AsAiSkill].')
-            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be executed without running anything');
+            ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be executed without running anything')
+            ->addOption('yes', 'y', InputOption::VALUE_NONE, 'Skip confirmation prompts and execute all proposed skills automatically');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
         $dryRun = (bool) $input->getOption('dry-run');
-
-        $config = LlmConfig::fromEnvironment();
-        $this->provider = ProviderFactory::create($config);
+        $autoConfirm = (bool) $input->getOption('yes');
 
         $io->title('Semitexa AI Assistant');
         $io->text([
-            'Provider : ' . $this->provider->name() . ' @ ' . $config->baseUrl,
-            'Model    : ' . $config->model,
+            'Provider : ' . $this->provider->name() . ' @ ' . $this->provider->baseUrl(),
+            'Model    : ' . $this->provider->model(),
             'Type "exit" or "quit" to end the session. Type "clear" to reset conversation.',
         ]);
 
         if (!$this->provider->healthCheck()) {
             $io->error([
-                'Cannot reach the LLM provider at ' . $config->baseUrl,
+                'Cannot reach the LLM provider at ' . $this->provider->baseUrl(),
                 'Ensure Ollama (or your LLM runtime) is running and accessible.',
             ]);
             return Command::FAILURE;
@@ -128,6 +129,7 @@ final class AiAssistantCommand extends Command
                     manifest: $manifest,
                     executor: $executor,
                     dryRun: $dryRun,
+                    autoConfirm: $autoConfirm,
                 ),
             };
 
@@ -141,6 +143,7 @@ final class AiAssistantCommand extends Command
         SkillManifest $manifest,
         ?SkillExecutor $executor,
         bool $dryRun,
+        bool $autoConfirm,
     ): void {
         $skillName = $plannerResponse->skill;
         if ($skillName === null) {
@@ -185,7 +188,7 @@ final class AiAssistantCommand extends Command
             AiConfirmationMode::Never => false,
         };
 
-        if ($needsConfirmation && !$io->confirm(sprintf('Execute skill "%s"? [y/N]', $skillName), false)) {
+        if ($needsConfirmation && !$autoConfirm && !$io->confirm(sprintf('Execute skill "%s"? [y/N]', $skillName), false)) {
             $io->text('Execution cancelled.');
             return;
         }
