@@ -4,25 +4,42 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Provider;
 
-use Semitexa\Llm\Configuration\LlmConfig;
+use Semitexa\Core\Attribute\Config;
+use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Llm\Contract\LlmProviderInterface;
 use Semitexa\Llm\Data\LlmRequest;
 use Semitexa\Llm\Data\LlmResponse;
 
+#[SatisfiesServiceContract(of: LlmProviderInterface::class)]
 final class OllamaProvider implements LlmProviderInterface
 {
-    public function __construct(
-        private readonly LlmConfig $config,
-    ) {}
+    #[Config(env: 'LLM_BASE_URL', default: 'http://127.0.0.1:11434')]
+    protected string $baseUrl;
+
+    #[Config(env: 'LLM_MODEL', default: 'gemma3:4b')]
+    protected string $model;
+
+    #[Config(env: 'LLM_TIMEOUT', default: 60)]
+    protected int $timeout;
 
     public function name(): string
     {
         return 'ollama';
     }
 
+    public function baseUrl(): string
+    {
+        return $this->baseUrl;
+    }
+
+    public function model(): string
+    {
+        return $this->model;
+    }
+
     public function healthCheck(): bool
     {
-        $ch = curl_init($this->config->baseUrl . '/api/tags');
+        $ch = curl_init($this->baseUrl . '/api/tags');
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 5,
@@ -50,7 +67,7 @@ final class OllamaProvider implements LlmProviderInterface
         $messages[] = ['role' => 'user', 'content' => $request->userMessage];
 
         $payload = json_encode([
-            'model' => $this->config->model,
+            'model' => $this->model,
             'messages' => $messages,
             'stream' => false,
             'format' => 'json',
@@ -58,13 +75,13 @@ final class OllamaProvider implements LlmProviderInterface
 
         $startTime = hrtime(true);
 
-        $ch = curl_init($this->config->baseUrl . '/api/chat');
+        $ch = curl_init($this->baseUrl . '/api/chat');
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_TIMEOUT => $this->config->timeout,
+            CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_CONNECTTIMEOUT => 10,
         ]);
 

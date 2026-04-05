@@ -11,6 +11,10 @@ interface LlmProviderInterface
 {
     public function name(): string;
 
+    public function baseUrl(): string;
+
+    public function model(): string;
+
     public function healthCheck(): bool;
 
     public function complete(LlmRequest $request): LlmResponse;
