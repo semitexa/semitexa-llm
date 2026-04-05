@@ -16,7 +16,7 @@ final class OllamaProvider implements LlmProviderInterface
     #[Config(env: 'LLM_BASE_URL', default: 'http://127.0.0.1:11434')]
     protected string $baseUrl;
 
-    #[Config(env: 'LLM_MODEL', default: 'gemma4:e4b')]
+    #[Config(env: 'LLM_MODEL', default: 'gemma3:4b')]
     protected string $model;
 
     #[Config(env: 'LLM_TIMEOUT', default: 60)]
