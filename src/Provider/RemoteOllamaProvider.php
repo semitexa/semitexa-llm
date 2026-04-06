@@ -7,27 +7,28 @@ namespace Semitexa\Llm\Provider;
 use Semitexa\Core\Attribute\Config;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Llm\Contract\LlmProviderInterface;
+use Semitexa\Llm\Data\LlmBackend;
 use Semitexa\Llm\Data\LlmRequest;
 use Semitexa\Llm\Data\LlmResponse;
 
-#[SatisfiesServiceContract(of: LlmProviderInterface::class)]
-final class OllamaProvider implements LlmProviderInterface
+#[SatisfiesServiceContract(of: LlmProviderInterface::class, factoryKey: LlmBackend::RemoteOllama)]
+final class RemoteOllamaProvider implements LlmProviderInterface
 {
-    #[Config(env: 'LLM_BASE_URL', default: 'http://127.0.0.1:11434')]
+    #[Config(env: 'LLM_REMOTE_OLLAMA_URL', default: '')]
     protected string $baseUrl;
 
-    #[Config(env: 'LLM_MODEL', default: 'gemma3:4b')]
+    #[Config(env: 'LLM_REMOTE_OLLAMA_MODEL', default: 'gemma4:e2b')]
     protected string $model;
 
-    #[Config(env: 'LLM_TIMEOUT', default: 60)]
+    #[Config(env: 'LLM_REMOTE_OLLAMA_TIMEOUT', default: 120)]
     protected int $timeout;
 
-    #[Config(env: 'LLM_RETRIES', default: 1)]
+    #[Config(env: 'LLM_REMOTE_OLLAMA_RETRIES', default: 2)]
     protected int $maxRetries;
 
     public function name(): string
     {
-        return 'ollama';
+        return 'remote_ollama';
     }
 
     public function baseUrl(): string
@@ -85,7 +86,16 @@ final class OllamaProvider implements LlmProviderInterface
             'model' => $this->model,
             'messages' => $messages,
             'stream' => false,
-        ], JSON_UNESCAPED_SLASHES);
+        ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        if ($payload === false) {
+            return new LlmResponse(
+                content: '',
+                success: false,
+                error: 'Failed to encode request: ' . json_last_error_msg(),
+                latencyMs: 0,
+            );
+        }
 
         $attempts = 0;
         $requestStart = hrtime(true);
@@ -93,7 +103,6 @@ final class OllamaProvider implements LlmProviderInterface
 
         while (true) {
             $attempts++;
-            $startTime = hrtime(true);
 
             $ch = curl_init($this->baseUrl . '/api/chat');
             curl_setopt_array($ch, [
@@ -113,17 +122,18 @@ final class OllamaProvider implements LlmProviderInterface
             $isTransientFailure = $response === false || $httpCode >= 500;
 
             if ($isTransientFailure && $attempts < $maxAttempts) {
-                usleep($attempts * 500_000); // 0.5s, 1s, 1.5s backoff
+                usleep($attempts * 500_000);
                 continue;
             }
 
             $latencyMs = (hrtime(true) - $requestStart) / 1_000_000;
 
             if ($response === false || $httpCode !== 200) {
+                $detail = is_string($response) && $response !== '' ? ': ' . substr($response, 0, 300) : '';
                 return new LlmResponse(
                     content: '',
                     success: false,
-                    error: $curlError !== '' ? $curlError : "HTTP {$httpCode}",
+                    error: $curlError !== '' ? $curlError : "HTTP {$httpCode}{$detail}",
                     latencyMs: $latencyMs,
                 );
             }

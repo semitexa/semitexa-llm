@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
-use Semitexa\Llm\Contract\LlmProviderInterface;
 use Semitexa\Llm\Data\LlmRequest;
 use Semitexa\Llm\Data\LlmResponse;
 use Semitexa\Llm\Data\PlannerResponse;
@@ -14,6 +13,7 @@ use Semitexa\Llm\Data\SkillManifest;
 use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Executor\SkillExecutor;
 use Semitexa\Llm\Planner\Planner;
+use Semitexa\Llm\Contract\LlmProviderInterface;
 use Semitexa\Llm\Policy\AiConfirmationMode;
 use Semitexa\Llm\Registry\SkillRegistry;
 use Semitexa\Llm\Session\ConversationSession;
@@ -44,20 +44,21 @@ final class AiAssistantCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
+        $provider = $this->provider;
         $io = new SymfonyStyle($input, $output);
         $dryRun = (bool) $input->getOption('dry-run');
         $autoConfirm = (bool) $input->getOption('yes');
 
         $io->title('Semitexa AI Assistant');
         $io->text([
-            'Provider : ' . $this->provider->name() . ' @ ' . $this->provider->baseUrl(),
-            'Model    : ' . $this->provider->model(),
+            'Provider : ' . $provider->name() . ' @ ' . $provider->baseUrl(),
+            'Model    : ' . $provider->model(),
             'Type "exit" or "quit" to end the session. Type "clear" to reset conversation.',
         ]);
 
-        if (!$this->provider->healthCheck()) {
+        if (!$provider->healthCheck()) {
             $io->error([
-                'Cannot reach the LLM provider at ' . $this->provider->baseUrl(),
+                'Cannot reach the LLM provider at ' . $provider->baseUrl(),
                 'Ensure Ollama (or your LLM runtime) is running and accessible.',
             ]);
             return Command::FAILURE;
@@ -112,7 +113,7 @@ final class AiAssistantCommand extends Command
 
             $io->text('<comment>Thinking...</comment>');
 
-            $llmResponse = $this->provider->complete($request);
+            $llmResponse = $provider->complete($request);
             $plannerResponse = $planner->parseResponse($llmResponse);
 
             if ($output->isVerbose() && !$llmResponse->success) {
