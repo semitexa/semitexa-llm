@@ -50,9 +50,10 @@ final readonly class SkillManifest
                 $args = [];
                 foreach ($skill->inputs as $name => $meta) {
                     $req = $meta['required'] ? 'required' : 'optional';
-                    $args[] = "{$name} ({$meta['type']}, {$req})";
+                    $desc = $meta['description'] !== '' ? " — {$meta['description']}" : '';
+                    $args[] = "{$name} ({$meta['type']}, {$req}){$desc}";
                 }
-                $lines[] = "  Inputs: " . implode(', ', $args);
+                $lines[] = "  Inputs: " . implode('; ', $args);
             }
         }
         return implode("\n", $lines);

@@ -54,12 +54,12 @@ PROMPT;
         }
 
         $content = trim($response->content);
-        $decoded = json_decode($content, true);
+        $decoded = $this->extractJson($content);
 
         if (!is_array($decoded) || !isset($decoded['type'])) {
             return new PlannerResponse(
                 type: PlannerResponseType::Answer,
-                reason: 'Raw text response',
+                reason: 'Raw text response (JSON extraction failed)',
                 message: $content !== '' ? $content : 'No response from assistant.',
             );
         }
@@ -81,5 +81,46 @@ PROMPT;
             confidence: isset($decoded['confidence']) ? (float) $decoded['confidence'] : null,
             message: isset($decoded['message']) ? (string) $decoded['message'] : null,
         );
+    }
+
+    /**
+     * Extract JSON from LLM output that may contain markdown fences, preamble text, or trailing content.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function extractJson(string $raw): ?array
+    {
+        // 1. Try direct decode first
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        // 2. Strip markdown code fences (```json ... ``` or ``` ... ```)
+        if (preg_match('/```(?:json)?\s*\n?(.*?)\n?\s*```/s', $raw, $matches)) {
+            $decoded = json_decode(trim($matches[1]), true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        // 3. Find the first { ... } block (greedy, outermost braces)
+        if (preg_match('/\{(?:[^{}]|(?:\{(?:[^{}]|\{[^{}]*\})*\}))*\}/s', $raw, $matches)) {
+            $decoded = json_decode($matches[0], true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+
+            // 4. Try fixing common issues: trailing commas before } or ]
+            $fixed = preg_replace('/,\s*([}\]])/', '$1', $matches[0]);
+            if ($fixed !== null) {
+                $decoded = json_decode($fixed, true);
+                if (is_array($decoded)) {
+                    return $decoded;
+                }
+            }
+        }
+
+        return null;
     }
 }

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Semitexa\Llm\Attributes;
+namespace Semitexa\Llm\Attribute;
 
 use Attribute;
 use Semitexa\Llm\Policy\AiArgumentPolicy;

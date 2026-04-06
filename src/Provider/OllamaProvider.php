@@ -22,6 +22,9 @@ final class OllamaProvider implements LlmProviderInterface
     #[Config(env: 'LLM_TIMEOUT', default: 60)]
     protected int $timeout;
 
+    #[Config(env: 'LLM_RETRIES', default: 1)]
+    protected int $maxRetries;
+
     public function name(): string
     {
         return 'ollama';
@@ -49,7 +52,19 @@ final class OllamaProvider implements LlmProviderInterface
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        return $response !== false && $httpCode === 200;
+        if ($response === false || $httpCode !== 200) {
+            return false;
+        }
+
+        $decoded = json_decode($response, true);
+        if (!is_array($decoded) || !isset($decoded['models'])) {
+            return false;
+        }
+
+        $availableModels = array_column($decoded['models'], 'name');
+
+        return in_array($this->model, $availableModels, true)
+            || in_array($this->model . ':latest', $availableModels, true);
     }
 
     public function complete(LlmRequest $request): LlmResponse
@@ -70,35 +85,49 @@ final class OllamaProvider implements LlmProviderInterface
             'model' => $this->model,
             'messages' => $messages,
             'stream' => false,
-            'format' => 'json',
         ], JSON_UNESCAPED_SLASHES);
 
-        $startTime = hrtime(true);
+        $attempts = 0;
+        $maxAttempts = max(1, $this->maxRetries + 1);
 
-        $ch = curl_init($this->baseUrl . '/api/chat');
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_TIMEOUT => $this->timeout,
-            CURLOPT_CONNECTTIMEOUT => 10,
-        ]);
+        while (true) {
+            $attempts++;
+            $startTime = hrtime(true);
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
+            $ch = curl_init($this->baseUrl . '/api/chat');
+            curl_setopt_array($ch, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => $payload,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                CURLOPT_TIMEOUT => $this->timeout,
+                CURLOPT_CONNECTTIMEOUT => 10,
+            ]);
 
-        $latencyMs = (hrtime(true) - $startTime) / 1_000_000;
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
 
-        if ($response === false || $httpCode !== 200) {
-            return new LlmResponse(
-                content: '',
-                success: false,
-                error: $curlError !== '' ? $curlError : "HTTP {$httpCode}",
-                latencyMs: $latencyMs,
-            );
+            $latencyMs = (hrtime(true) - $startTime) / 1_000_000;
+
+            $isTransientFailure = $response === false || $httpCode >= 500;
+
+            if ($isTransientFailure && $attempts < $maxAttempts) {
+                usleep($attempts * 500_000); // 0.5s, 1s, 1.5s backoff
+                continue;
+            }
+
+            if ($response === false || $httpCode !== 200) {
+                return new LlmResponse(
+                    content: '',
+                    success: false,
+                    error: $curlError !== '' ? $curlError : "HTTP {$httpCode}",
+                    latencyMs: $latencyMs,
+                );
+            }
+
+            break;
         }
 
         $decoded = json_decode($response, true);

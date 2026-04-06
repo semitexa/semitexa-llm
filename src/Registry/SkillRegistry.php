@@ -7,7 +7,7 @@ namespace Semitexa\Llm\Registry;
 use ReflectionClass;
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Discovery\ClassDiscovery;
-use Semitexa\Llm\Attributes\AsAiSkill;
+use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Data\SkillEntry;
 use Semitexa\Llm\Data\SkillManifest;
 use Semitexa\Llm\Policy\AiArgumentPolicy;
@@ -105,21 +105,21 @@ final class SkillRegistry
             return [];
         }
 
-        $optionDescriptions = $this->tryGetOptionDescriptions($ref);
+        $optionMetadata = $this->tryGetOptionMetadata($ref);
 
         $argsToExpose = $skill->resolvedArgumentPolicy === AiArgumentPolicy::All
-            ? array_keys($optionDescriptions)
+            ? array_keys($optionMetadata)
             : $skill->exposeArguments;
 
         $inputs = [];
         foreach ($argsToExpose as $argName) {
             $required = in_array($argName, $skill->requiredArguments, true);
-            $description = $optionDescriptions[$argName] ?? '';
+            $meta = $optionMetadata[$argName] ?? null;
 
             $inputs[$argName] = [
-                'type' => 'flag',
+                'type' => $meta['type'] ?? 'flag',
                 'required' => $required,
-                'description' => $description,
+                'description' => $meta['description'] ?? '',
             ];
         }
 
@@ -127,9 +127,9 @@ final class SkillRegistry
     }
 
     /**
-     * @return array<string, string>
+     * @return array<string, array{description: string, type: string}>
      */
-    private function tryGetOptionDescriptions(ReflectionClass $ref): array
+    private function tryGetOptionMetadata(ReflectionClass $ref): array
     {
         try {
             if (!$ref->isSubclassOf(Command::class)) {
@@ -144,11 +144,19 @@ final class SkillRegistry
             /** @var Command $command */
             $command = $ref->newInstance();
 
-            $descriptions = [];
+            $metadata = [];
             foreach ($command->getDefinition()->getOptions() as $option) {
-                $descriptions[$option->getName()] = $option->getDescription();
+                $type = match (true) {
+                    $option->isArray() => 'array',
+                    $option->acceptValue() => 'string',
+                    default => 'flag',
+                };
+                $metadata[$option->getName()] = [
+                    'description' => $option->getDescription(),
+                    'type' => $type,
+                ];
             }
-            return $descriptions;
+            return $metadata;
         } catch (\Throwable) {
             return [];
         }

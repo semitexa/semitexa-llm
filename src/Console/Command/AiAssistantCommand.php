@@ -115,7 +115,23 @@ final class AiAssistantCommand extends Command
             $llmResponse = $this->provider->complete($request);
             $plannerResponse = $planner->parseResponse($llmResponse);
 
-            $session->addAssistantMessage($llmResponse->content);
+            if ($output->isVerbose() && !$llmResponse->success) {
+                $io->text(sprintf('<fg=yellow>[debug] LLM error: %s</>', $llmResponse->error ?? 'unknown'));
+            }
+
+            if ($output->isVerbose()
+                && $llmResponse->success
+                && $plannerResponse->reason === 'Raw text response (JSON extraction failed)'
+            ) {
+                $io->text(sprintf(
+                    '<fg=yellow>[debug] JSON extraction failed, raw: %s</>',
+                    mb_substr($llmResponse->content, 0, 200),
+                ));
+            }
+
+            if ($llmResponse->success && $llmResponse->content !== '') {
+                $session->addAssistantMessage($llmResponse->content);
+            }
 
             $this->renderObservabilityLine($io, $llmResponse);
 
@@ -188,7 +204,7 @@ final class AiAssistantCommand extends Command
             AiConfirmationMode::Never => false,
         };
 
-        if ($needsConfirmation && !$autoConfirm && !$io->confirm(sprintf('Execute skill "%s"? [y/N]', $skillName), false)) {
+        if ($needsConfirmation && !$autoConfirm && !$io->confirm(sprintf('Execute skill "%s"?', $skillName), false)) {
             $io->text('Execution cancelled.');
             return;
         }
