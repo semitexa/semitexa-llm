@@ -21,6 +21,7 @@ final readonly class PlannerResponse
         public string $reason = '',
         public ?float $confidence = null,
         public ?string $message = null,
+        public bool $jsonExtractionFailed = false,
     ) {}
 
     public function toArray(): array
@@ -45,6 +46,10 @@ final readonly class PlannerResponse
 
         if ($this->message !== null) {
             $data['message'] = $this->message;
+        }
+
+        if ($this->jsonExtractionFailed) {
+            $data['json_extraction_failed'] = true;
         }
 
         return $data;

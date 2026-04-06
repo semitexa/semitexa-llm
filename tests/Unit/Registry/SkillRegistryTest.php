@@ -6,7 +6,7 @@ namespace Semitexa\Llm\Tests\Unit\Registry;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Attribute\AsCommand;
-use Semitexa\Llm\Attributes\AsAiSkill;
+use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Policy\AiConfirmationMode;
 use Semitexa\Llm\Policy\AiRiskLevel;
 use Semitexa\Llm\Registry\SkillRegistry;

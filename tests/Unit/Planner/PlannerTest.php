@@ -113,6 +113,64 @@ final class PlannerTest extends TestCase
         $this->assertSame(PlannerResponseType::Refuse, $result->type);
     }
 
+    public function test_parses_json_wrapped_in_code_fences(): void
+    {
+        $response = new LlmResponse(
+            content: "```json\n{\"type\":\"answer\",\"message\":\"Done.\",\"reason\":\"Direct.\"}\n```",
+            success: true,
+        );
+
+        $result = $this->planner->parseResponse($response);
+
+        $this->assertSame(PlannerResponseType::Answer, $result->type);
+        $this->assertSame('Done.', $result->message);
+    }
+
+    public function test_parses_json_with_preamble_text(): void
+    {
+        $response = new LlmResponse(
+            content: "Here is my response:\n{\"type\":\"answer\",\"message\":\"Hello.\",\"reason\":\"Greeting.\"}",
+            success: true,
+        );
+
+        $result = $this->planner->parseResponse($response);
+
+        $this->assertSame(PlannerResponseType::Answer, $result->type);
+        $this->assertSame('Hello.', $result->message);
+    }
+
+    public function test_parses_json_with_trailing_text(): void
+    {
+        $response = new LlmResponse(
+            content: "{\"type\":\"propose_skill\",\"skill\":\"cache:clear\",\"arguments\":{},\"reason\":\"Match.\",\"confidence\":0.9}\nLet me know if you need more.",
+            success: true,
+        );
+
+        $result = $this->planner->parseResponse($response);
+
+        $this->assertSame(PlannerResponseType::ProposeSkill, $result->type);
+        $this->assertSame('cache:clear', $result->skill);
+    }
+
+    public function test_parses_json_with_trailing_comma(): void
+    {
+        $response = new LlmResponse(
+            content: '{"type":"answer","message":"Done.","reason":"Direct.",}',
+            success: true,
+        );
+
+        $result = $this->planner->parseResponse($response);
+
+        $this->assertSame(PlannerResponseType::Answer, $result->type);
+        $this->assertSame('Done.', $result->message);
+    }
+
+    public function test_extract_json_returns_null_for_no_json(): void
+    {
+        $result = $this->planner->extractJson('No JSON here at all.');
+        $this->assertNull($result);
+    }
+
     public function test_system_prompt_contains_skill_manifest(): void
     {
         $manifest = new SkillManifest(
