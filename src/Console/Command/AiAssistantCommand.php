@@ -121,7 +121,7 @@ final class AiAssistantCommand extends Command
 
             if ($output->isVerbose()
                 && $llmResponse->success
-                && $plannerResponse->reason === 'Raw text response (JSON extraction failed)'
+                && $plannerResponse->jsonExtractionFailed
             ) {
                 $io->text(sprintf(
                     '<fg=yellow>[debug] JSON extraction failed, raw: %s</>',

@@ -114,12 +114,12 @@ final class SkillRegistry
         $inputs = [];
         foreach ($argsToExpose as $argName) {
             $required = in_array($argName, $skill->requiredArguments, true);
-            $meta = $optionMetadata[$argName] ?? null;
+            $meta = $optionMetadata[$argName] ?? ['type' => 'flag', 'description' => ''];
 
             $inputs[$argName] = [
-                'type' => $meta['type'] ?? 'flag',
+                'type' => $meta['type'],
                 'required' => $required,
-                'description' => $meta['description'] ?? '',
+                'description' => $meta['description'],
             ];
         }
 

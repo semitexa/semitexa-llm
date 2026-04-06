@@ -60,6 +60,7 @@ PROMPT;
             return new PlannerResponse(
                 type: PlannerResponseType::Answer,
                 reason: 'Raw text response (JSON extraction failed)',
+                jsonExtractionFailed: true,
                 message: $content !== '' ? $content : 'No response from assistant.',
             );
         }
@@ -104,21 +105,75 @@ PROMPT;
             }
         }
 
-        // 3. Find the first { ... } block (greedy, outermost braces)
-        if (preg_match('/\{(?:[^{}]|(?:\{(?:[^{}]|\{[^{}]*\})*\}))*\}/s', $raw, $matches)) {
-            $decoded = json_decode($matches[0], true);
+        // 3. Find the first balanced { ... } block without regex backtracking.
+        $jsonBlock = $this->extractBalancedJsonBlock($raw);
+        if ($jsonBlock !== null) {
+            $decoded = json_decode($jsonBlock, true);
             if (is_array($decoded)) {
                 return $decoded;
             }
 
             // 4. Try fixing common issues: trailing commas before } or ]
-            $fixed = preg_replace('/,\s*([}\]])/', '$1', $matches[0]);
+            $fixed = preg_replace('/,\s*([}\]])/', '$1', $jsonBlock);
             if ($fixed !== null) {
                 $decoded = json_decode($fixed, true);
                 if (is_array($decoded)) {
                     return $decoded;
                 }
             }
+        }
+
+        return null;
+    }
+
+    private function extractBalancedJsonBlock(string $raw): ?string
+    {
+        $start = strpos($raw, '{');
+        while ($start !== false) {
+            $depth = 0;
+            $inString = false;
+            $escape = false;
+
+            $length = strlen($raw);
+            for ($i = $start; $i < $length; $i++) {
+                $char = $raw[$i];
+
+                if ($inString) {
+                    if ($escape) {
+                        $escape = false;
+                        continue;
+                    }
+
+                    if ($char === '\\') {
+                        $escape = true;
+                        continue;
+                    }
+
+                    if ($char === '"') {
+                        $inString = false;
+                    }
+                    continue;
+                }
+
+                if ($char === '"') {
+                    $inString = true;
+                    continue;
+                }
+
+                if ($char === '{') {
+                    $depth++;
+                    continue;
+                }
+
+                if ($char === '}') {
+                    $depth--;
+                    if ($depth === 0) {
+                        return substr($raw, $start, $i - $start + 1);
+                    }
+                }
+            }
+
+            $start = strpos($raw, '{', $start + 1);
         }
 
         return null;

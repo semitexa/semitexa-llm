@@ -13,7 +13,11 @@ final class ConversationSession
 
     public function __construct(
         private readonly int $maxMessages = self::DEFAULT_MAX_MESSAGES,
-    ) {}
+    ) {
+        if ($this->maxMessages < 1) {
+            throw new \InvalidArgumentException('$maxMessages must be greater than or equal to 1.');
+        }
+    }
 
     public function addUserMessage(string $content): void
     {

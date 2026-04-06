@@ -88,6 +88,7 @@ final class OllamaProvider implements LlmProviderInterface
         ], JSON_UNESCAPED_SLASHES);
 
         $attempts = 0;
+        $requestStart = hrtime(true);
         $maxAttempts = max(1, $this->maxRetries + 1);
 
         while (true) {
@@ -109,14 +110,14 @@ final class OllamaProvider implements LlmProviderInterface
             $curlError = curl_error($ch);
             curl_close($ch);
 
-            $latencyMs = (hrtime(true) - $startTime) / 1_000_000;
-
             $isTransientFailure = $response === false || $httpCode >= 500;
 
             if ($isTransientFailure && $attempts < $maxAttempts) {
                 usleep($attempts * 500_000); // 0.5s, 1s, 1.5s backoff
                 continue;
             }
+
+            $latencyMs = (hrtime(true) - $requestStart) / 1_000_000;
 
             if ($response === false || $httpCode !== 200) {
                 return new LlmResponse(
