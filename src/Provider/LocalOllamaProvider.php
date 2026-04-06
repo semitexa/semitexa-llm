@@ -103,7 +103,6 @@ final class LocalOllamaProvider implements LlmProviderInterface
 
         while (true) {
             $attempts++;
-            $startTime = hrtime(true);
 
             $ch = curl_init($this->baseUrl . '/api/chat');
             curl_setopt_array($ch, [

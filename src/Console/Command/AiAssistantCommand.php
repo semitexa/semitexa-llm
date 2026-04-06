@@ -132,6 +132,8 @@ final class AiAssistantCommand extends Command
 
             if ($llmResponse->success && $llmResponse->content !== '') {
                 $session->addAssistantMessage($llmResponse->content);
+            } else {
+                $session->addAssistantMessage('[Assistant unavailable]');
             }
 
             $this->renderObservabilityLine($io, $llmResponse);
