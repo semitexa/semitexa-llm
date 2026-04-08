@@ -59,7 +59,7 @@ final class SkillRegistry
 
             /** @var AsAiSkill $skill */
             $skill = $skillAttrs[0]->newInstance();
-            if (!$skill->allowed) {
+            if (!$skill->resolvedAllowed) {
                 return null;
             }
 
