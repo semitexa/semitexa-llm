@@ -73,6 +73,20 @@ final class SkillRegistryTest extends TestCase
         $this->assertSame('aaa:command', $manifest->skills[0]->name);
         $this->assertSame('stub:command', $manifest->skills[1]->name);
     }
+
+    public function test_env_disabled_skill_is_excluded(): void
+    {
+        putenv('TEST_LLM_SKILL_ENABLED=0');
+
+        try {
+            $registry = new SkillRegistry();
+            $manifest = $registry->buildManifestFromClasses([EnvControlledSkillCommand::class]);
+
+            $this->assertCount(0, $manifest->skills);
+        } finally {
+            putenv('TEST_LLM_SKILL_ENABLED');
+        }
+    }
 }
 
 // --- Test fixtures ---
@@ -119,6 +133,16 @@ final class NoCommandAttributeClass
 #[AsCommand(name: 'aaa:command', description: 'Sorts first')]
 #[AsAiSkill(allowed: true, summary: 'First alphabetically.')]
 final class AnotherStubSkillCommand extends Command
+{
+    protected function execute(InputInterface $input, OutputInterface $output): int
+    {
+        return Command::SUCCESS;
+    }
+}
+
+#[AsCommand(name: 'env:controlled', description: 'Env-controlled skill')]
+#[AsAiSkill(allowed: 'env::TEST_LLM_SKILL_ENABLED::true', summary: 'Enabled only when env flag allows it.')]
+final class EnvControlledSkillCommand extends Command
 {
     protected function execute(InputInterface $input, OutputInterface $output): int
     {

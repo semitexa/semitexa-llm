@@ -59,7 +59,7 @@ final class SkillRegistry
 
             /** @var AsAiSkill $skill */
             $skill = $skillAttrs[0]->newInstance();
-            if (!$skill->allowed) {
+            if (!$skill->resolvedAllowed) {
                 return null;
             }
 
@@ -87,6 +87,13 @@ final class SkillRegistry
                 channels: $skill->channels,
                 executionKind: $skill->resolvedExecutionKind,
             );
+        } catch (\ValueError $e) {
+            error_log(sprintf(
+                '[Semitexa LLM] Failed to build skill manifest entry for %s: %s',
+                $className,
+                $e->getMessage(),
+            ));
+            return null;
         } catch (\Throwable) {
             return null;
         }

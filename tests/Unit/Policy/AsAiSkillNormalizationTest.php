@@ -70,4 +70,24 @@ final class AsAiSkillNormalizationTest extends TestCase
         $skill = new AsAiSkill(exposeArguments: ['twig', 'json']);
         $this->assertSame(['twig', 'json'], $skill->exposeArguments);
     }
+
+    public function test_allowed_can_be_resolved_from_env_reference(): void
+    {
+        putenv('TEST_AI_SKILL_ALLOWED=0');
+
+        try {
+            $skill = new AsAiSkill(allowed: 'env::TEST_AI_SKILL_ALLOWED::true');
+            $this->assertFalse($skill->resolvedAllowed);
+        } finally {
+            putenv('TEST_AI_SKILL_ALLOWED');
+        }
+    }
+
+    public function test_allowed_env_reference_falls_back_to_default(): void
+    {
+        putenv('TEST_AI_SKILL_ALLOWED');
+
+        $skill = new AsAiSkill(allowed: 'env::TEST_AI_SKILL_ALLOWED::true');
+        $this->assertTrue($skill->resolvedAllowed);
+    }
 }
