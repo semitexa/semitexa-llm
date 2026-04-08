@@ -87,6 +87,13 @@ final class SkillRegistry
                 channels: $skill->channels,
                 executionKind: $skill->resolvedExecutionKind,
             );
+        } catch (\ValueError $e) {
+            error_log(sprintf(
+                '[Semitexa LLM] Failed to build skill manifest entry for %s: %s',
+                $className,
+                $e->getMessage(),
+            ));
+            return null;
         } catch (\Throwable) {
             return null;
         }
