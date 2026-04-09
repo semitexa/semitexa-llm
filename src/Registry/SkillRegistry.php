@@ -9,6 +9,7 @@ use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Data\SkillEntry;
+use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Data\SkillManifest;
 use Semitexa\Llm\Policy\AiArgumentPolicy;
 use Symfony\Component\Console\Command\Command;
@@ -17,6 +18,7 @@ final class SkillRegistry
 {
     public function __construct(
         private ?ClassDiscovery $classDiscovery = null,
+        private ?LoggerInterface $logger = null,
     ) {}
 
     public function buildManifest(): SkillManifest
@@ -88,13 +90,14 @@ final class SkillRegistry
                 executionKind: $skill->resolvedExecutionKind,
             );
         } catch (\ValueError $e) {
-            error_log(sprintf(
-                '[Semitexa LLM] Failed to build skill manifest entry for %s: %s',
-                $className,
-                $e->getMessage(),
-            ));
+            $this->logger?->warning('Failed to build skill manifest entry', [
+                'class' => $className,
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
             return null;
         } catch (\Throwable) {
+            // Non-ValueError failures (e.g. missing constructor deps) are silently skipped
             return null;
         }
     }
@@ -165,6 +168,7 @@ final class SkillRegistry
             }
             return $metadata;
         } catch (\Throwable) {
+            // Command instantiation may fail — return empty metadata
             return [];
         }
     }
