@@ -6,10 +6,10 @@ namespace Semitexa\Llm\Attribute;
 
 use Attribute;
 use Semitexa\Core\Config\EnvValueResolver;
-use Semitexa\Llm\Policy\AiArgumentPolicy;
-use Semitexa\Llm\Policy\AiConfirmationMode;
-use Semitexa\Llm\Policy\AiExecutionKind;
-use Semitexa\Llm\Policy\AiRiskLevel;
+use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
+use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
+use Semitexa\Llm\Domain\Enum\AiExecutionKind;
+use Semitexa\Llm\Domain\Enum\AiRiskLevel;
 
 #[Attribute(Attribute::TARGET_CLASS)]
 final class AsAiSkill

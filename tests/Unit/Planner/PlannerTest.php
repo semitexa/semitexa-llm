@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Tests\Unit\Planner;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Llm\Data\LlmResponse;
-use Semitexa\Llm\Data\PlannerResponseType;
-use Semitexa\Llm\Data\SkillManifest;
-use Semitexa\Llm\Planner\Planner;
+use Semitexa\Llm\Domain\Model\LlmResponse;
+use Semitexa\Llm\Domain\Enum\PlannerResponseType;
+use Semitexa\Llm\Domain\Model\SkillManifest;
+use Semitexa\Llm\Application\Service\Planner;
 
 final class PlannerTest extends TestCase
 {
