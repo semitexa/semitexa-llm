@@ -6,10 +6,10 @@ namespace Semitexa\Llm\Tests\Unit\Policy;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Llm\Attribute\AsAiSkill;
-use Semitexa\Llm\Policy\AiArgumentPolicy;
-use Semitexa\Llm\Policy\AiConfirmationMode;
-use Semitexa\Llm\Policy\AiExecutionKind;
-use Semitexa\Llm\Policy\AiRiskLevel;
+use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
+use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
+use Semitexa\Llm\Domain\Enum\AiExecutionKind;
+use Semitexa\Llm\Domain\Enum\AiRiskLevel;
 
 final class AsAiSkillNormalizationTest extends TestCase
 {

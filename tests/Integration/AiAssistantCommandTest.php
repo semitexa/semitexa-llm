@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Tests\Integration;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Llm\Console\Command\AiAssistantCommand;
-use Semitexa\Llm\Console\Command\AiSkillsCommand;
+use Semitexa\Llm\Application\Console\Command\AiAssistantCommand;
+use Semitexa\Llm\Application\Console\Command\AiSkillsCommand;
 use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Tester\CommandTester;
 
