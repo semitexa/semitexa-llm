@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Tests\Unit\Session;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Llm\Session\ConversationSession;
+use Semitexa\Llm\Application\Service\ConversationSession;
 
 final class ConversationSessionTest extends TestCase
 {

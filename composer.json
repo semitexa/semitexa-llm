@@ -19,7 +19,10 @@
   "autoload": {
     "psr-4": {
       "Semitexa\\Llm\\": "src/"
-    }
+    },
+    "files": [
+      "src/compat.php"
+    ]
   },
   "autoload-dev": {
     "psr-4": {
