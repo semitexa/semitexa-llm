@@ -35,5 +35,6 @@
         "ai",
         "assistant",
         "skills"
-    ]
+    ],
+    "version": "v1.0.4"
 }
