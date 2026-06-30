@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Application\Console\Command;
 
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
+use Semitexa\Llm\Application\Service\LlmProviderResolver;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
@@ -13,7 +15,6 @@ use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Application\Service\SkillExecutor;
 use Semitexa\Llm\Application\Service\Planner;
-use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
 use Semitexa\Llm\Application\Service\SkillRegistry;
 use Semitexa\Llm\Application\Service\ConversationSession;
@@ -27,11 +28,8 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'ai', description: 'Start an interactive AI assistant backed by a local LLM. Uses skills defined with #[AsAiSkill].')]
 final class AiAssistantCommand extends Command
 {
-    public function __construct(
-        private readonly LlmProviderInterface $provider,
-    ) {
-        parent::__construct();
-    }
+    #[InjectAsReadonly]
+    protected LlmProviderResolver $providers;
 
     protected function configure(): void
     {
@@ -44,7 +42,7 @@ final class AiAssistantCommand extends Command
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $provider = $this->provider;
+        $provider = $this->providers->provider();
         $io = new SymfonyStyle($input, $output);
         $dryRun = (bool) $input->getOption('dry-run');
         $autoConfirm = (bool) $input->getOption('yes');
