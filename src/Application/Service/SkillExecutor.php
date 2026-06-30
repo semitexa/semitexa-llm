@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Application\Service;
 
+use Semitexa\Llm\Domain\Contract\InvocableSkillInterface;
 use Semitexa\Llm\Domain\Model\ExecutionResult;
 use Semitexa\Llm\Domain\Model\SkillEntry;
 use Semitexa\Llm\Domain\Model\SkillManifest;
@@ -15,8 +16,13 @@ use Symfony\Component\Console\Output\BufferedOutput;
 
 final class SkillExecutor
 {
+    /**
+     * @param (\Closure(class-string): object)|null $skillResolver resolves a non-command
+     *        skill FQCN to an instance (DI-backed when supplied; defaults to `new $class()`).
+     */
     public function __construct(
         private readonly Application $application,
+        private readonly ?\Closure $skillResolver = null,
     ) {}
 
     /**
@@ -42,6 +48,11 @@ final class SkillExecutor
         }
 
         $this->validateArguments($entry, $arguments);
+
+        // Non-command (invocable) skill — run it directly, off the console.
+        if ($entry->skillClass !== null) {
+            return $this->invoke($entry, $skillName, $arguments);
+        }
 
         $inputArgs = ['command' => $entry->sourceCommand];
         foreach ($arguments as $name => $value) {
@@ -75,6 +86,46 @@ final class SkillExecutor
             output: $output->fetch(),
             approved: true,
         );
+    }
+
+    /**
+     * Execute a non-command {@see InvocableSkillInterface} skill directly.
+     *
+     * @param array<string, mixed> $arguments
+     */
+    private function invoke(SkillEntry $entry, string $skillName, array $arguments): ExecutionResult
+    {
+        $class = $entry->skillClass;
+
+        try {
+            $skill = $this->skillResolver !== null
+                ? ($this->skillResolver)($class)
+                : new $class();
+
+            if (!$skill instanceof InvocableSkillInterface) {
+                throw new \RuntimeException(
+                    "Skill '{$skillName}' ({$class}) does not implement InvocableSkillInterface."
+                );
+            }
+
+            /** @var array<string, scalar|null> $args */
+            $args = $arguments;
+
+            return new ExecutionResult(
+                skill: $skillName,
+                exitCode: 0,
+                output: $skill->invoke($args),
+                approved: true,
+            );
+        } catch (\Throwable $e) {
+            return new ExecutionResult(
+                skill: $skillName,
+                exitCode: 1,
+                output: '',
+                approved: true,
+                error: $e->getMessage(),
+            );
+        }
     }
 
     /**

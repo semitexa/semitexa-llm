@@ -24,6 +24,12 @@ final readonly class PlannerResponse
         public ?float $confidence = null,
         public ?string $message = null,
         public bool $jsonExtractionFailed = false,
+        /**
+         * Ordered skill chain for propose_pipeline (orchestration).
+         *
+         * @var list<array{skill: string, arguments: array<string, mixed>}>
+         */
+        public array $steps = [],
     ) {}
 
     public function toArray(): array
@@ -52,6 +58,10 @@ final readonly class PlannerResponse
 
         if ($this->jsonExtractionFailed) {
             $data['json_extraction_failed'] = true;
+        }
+
+        if ($this->steps !== []) {
+            $data['steps'] = $this->steps;
         }
 
         return $data;

@@ -31,11 +31,15 @@ Clarification question:
 Propose a skill:
 {"type":"propose_skill","skill":"skill-name","arguments":{},"reason":"Why this skill matches.","confidence":0.9}
 
+Propose a pipeline (an ordered chain of skills run in sequence — ONLY when the request genuinely needs several skills one after another):
+{"type":"propose_pipeline","steps":[{"skill":"skill-a","arguments":{}},{"skill":"skill-b","arguments":{}}],"reason":"Why this chain.","confidence":0.8}
+
 Refuse:
 {"type":"refuse","message":"Why you cannot help.","reason":"Safety or policy reason."}
 
 Rules:
 - Only propose skills from the list above. Never invent skill names or argument names.
+- Prefer a single propose_skill; use propose_pipeline only when one skill must follow another.
 - Arguments must only use names listed in the skill inputs.
 - If the request is ambiguous, ask for clarification.
 - If no skill matches, answer directly or refuse.
@@ -81,7 +85,34 @@ PROMPT;
             reason: isset($decoded['reason']) ? (string) $decoded['reason'] : '',
             confidence: isset($decoded['confidence']) ? (float) $decoded['confidence'] : null,
             message: isset($decoded['message']) ? (string) $decoded['message'] : null,
+            steps: $this->parseSteps($decoded['steps'] ?? null),
         );
+    }
+
+    /**
+     * Normalise a raw `steps` array into a clean ordered skill chain.
+     *
+     * @return list<array{skill: string, arguments: array<string, mixed>}>
+     */
+    private function parseSteps(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $steps = [];
+        foreach ($raw as $step) {
+            if (!is_array($step) || !isset($step['skill'])) {
+                continue;
+            }
+
+            $steps[] = [
+                'skill' => (string) $step['skill'],
+                'arguments' => is_array($step['arguments'] ?? null) ? $step['arguments'] : [],
+            ];
+        }
+
+        return $steps;
     }
 
     /**
