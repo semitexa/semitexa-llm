@@ -11,12 +11,32 @@ use Semitexa\Llm\Domain\Model\SkillManifest;
 
 final class Planner
 {
-    public function buildSystemPrompt(SkillManifest $manifest): string
+    /**
+     * @param string|null $persona identity/role framing supplied by the caller
+     *        (e.g. Semitexa OS injects who the assistant is and who it serves).
+     *        When null, a generic framework-assistant framing is used.
+     */
+    public function buildSystemPrompt(SkillManifest $manifest, ?string $persona = null): string
     {
         $skillsPrompt = $manifest->toCompactPrompt();
+        $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.';
+
+        // Give the model an absolute time anchor so it can resolve relative dates
+        // ("today", "tomorrow", "next Friday", "завтра") into concrete values
+        // instead of passing language-specific phrases downstream skills can't parse.
+        //
+        // This line is kept at the very END of the prompt on purpose: it changes
+        // every minute, and an LLM runtime (Ollama) caches the KV of the longest
+        // matching prompt PREFIX. Putting a volatile value up top would bust the
+        // whole (large, static) skills prefix cache every minute; at the tail only
+        // this short suffix re-computes, so consecutive turns reuse the prefill.
+        $now = new \DateTimeImmutable();
+        $nowLine = 'Current date and time: ' . $now->format('l, j F Y, H:i')
+            . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
+            . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
 
         return <<<PROMPT
-You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.
+{$persona}
 
 {$skillsPrompt}
 
@@ -44,6 +64,8 @@ Rules:
 - If the request is ambiguous, ask for clarification.
 - If no skill matches, answer directly or refuse.
 - Output valid JSON only. No markdown, no code fences, no extra text.
+
+{$nowLine}
 PROMPT;
     }
 

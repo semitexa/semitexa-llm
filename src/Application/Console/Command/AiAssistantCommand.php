@@ -14,6 +14,7 @@ use Semitexa\Llm\Domain\Enum\PlannerResponseType;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Application\Service\SkillExecutor;
+use Semitexa\Llm\Application\Service\PersonaRegistry;
 use Semitexa\Llm\Application\Service\Planner;
 use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
 use Semitexa\Llm\Application\Service\SkillRegistry;
@@ -74,7 +75,9 @@ final class AiAssistantCommand extends Command
         }
 
         $planner = new Planner();
-        $systemPrompt = $planner->buildSystemPrompt($manifest);
+        // The console operates as the framework assistant (see PersonaRegistry).
+        $frameworkPersona = (new PersonaRegistry())->framing('framework');
+        $systemPrompt = $planner->buildSystemPrompt($manifest, $frameworkPersona !== '' ? $frameworkPersona : null);
         $session = new ConversationSession();
 
         $application = $this->getApplication();
