@@ -29,6 +29,24 @@ final readonly class SkillManifest
         return json_encode($this->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     }
 
+    /**
+     * A copy keeping only skills exposed on at least one of the given channels.
+     * Used to scope a manifest to a surface (e.g. the OS chat gets web + ui skills,
+     * never console-only dev commands) — which both narrows routing and shrinks the
+     * planner system prompt.
+     *
+     * @param list<string> $channels
+     */
+    public function forChannels(array $channels): self
+    {
+        $kept = array_values(array_filter(
+            $this->skills,
+            static fn(SkillEntry $s): bool => array_intersect($s->channels, $channels) !== [],
+        ));
+
+        return new self($this->artifact, $this->generatedAt, $kept);
+    }
+
     public function findSkill(string $name): ?SkillEntry
     {
         foreach ($this->skills as $skill) {
