@@ -54,6 +54,16 @@ final class AsAiSkill
          * dialog surface (e.g. '/os/app/notes'). Hosted by the Focus zone.
          */
         public ?string $entry = null,
+        /**
+         * Per-argument guidance shown to the planner (argName => one-line hint).
+         * Command skills inherit descriptions from their console option
+         * definitions automatically; invocable skills have no such source, so
+         * without hints their inputs render bare and the model guesses what to
+         * put in them (e.g. a whole sentence where a short name was expected).
+         *
+         * @var array<string, string>
+         */
+        public array $argumentHints = [],
     ) {
         $this->resolvedAllowed = $this->resolveAllowed($allowed);
 

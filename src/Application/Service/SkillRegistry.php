@@ -155,12 +155,21 @@ final class SkillRegistry
         $inputs = [];
         foreach ($argsToExpose as $argName) {
             $required = in_array($argName, $skill->requiredArguments, true);
-            $meta = $optionMetadata[$argName] ?? ['type' => 'flag', 'description' => ''];
+            // Console options carry their own type + description; invocable-skill
+            // arguments have no option source, so a declared argumentHint (see
+            // AsAiSkill) turns them into a described string input instead of a
+            // bare "flag" the model has to guess at.
+            $meta = $optionMetadata[$argName]
+                ?? (isset($skill->argumentHints[$argName])
+                    ? ['type' => 'string', 'description' => $skill->argumentHints[$argName]]
+                    : ['type' => 'flag', 'description' => '']);
 
             $inputs[$argName] = [
                 'type' => $meta['type'],
                 'required' => $required,
-                'description' => $meta['description'],
+                'description' => ($meta['description'] === '' && isset($skill->argumentHints[$argName]))
+                    ? $skill->argumentHints[$argName]
+                    : $meta['description'],
             ];
         }
 

@@ -74,6 +74,21 @@ final class SkillRegistryTest extends TestCase
         $this->assertSame('stub:command', $manifest->skills[1]->name);
     }
 
+    public function test_invocable_skill_argument_hints_become_described_string_inputs(): void
+    {
+        $registry = new SkillRegistry();
+        $manifest = $registry->buildManifestFromClasses([HintedInvocableSkill::class]);
+
+        $this->assertCount(1, $manifest->skills);
+        $skill = $manifest->skills[0];
+
+        $this->assertSame('string', $skill->inputs['what']['type']);
+        $this->assertSame('The short NAME only.', $skill->inputs['what']['description']);
+        // No hint declared → the legacy bare-flag fallback is untouched.
+        $this->assertSame('flag', $skill->inputs['kind']['type']);
+        $this->assertSame('', $skill->inputs['kind']['description']);
+    }
+
     public function test_env_disabled_skill_is_excluded(): void
     {
         putenv('TEST_LLM_SKILL_ENABLED=0');
@@ -137,6 +152,26 @@ final class AnotherStubSkillCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         return Command::SUCCESS;
+    }
+}
+
+#[AsAiSkill(
+    allowed: true,
+    name: 'hinted',
+    summary: 'Invocable skill with argument hints.',
+    useWhen: 'Testing.',
+    avoidWhen: 'Production.',
+    confirmation: AiConfirmationMode::Never,
+    argumentPolicy: 'allowlisted',
+    exposeArguments: ['what', 'kind'],
+    argumentHints: ['what' => 'The short NAME only.'],
+    channels: ['web'],
+)]
+final class HintedInvocableSkill implements \Semitexa\Llm\Domain\Contract\InvocableSkillInterface
+{
+    public function invoke(array $arguments): string
+    {
+        return 'ok';
     }
 }
 
