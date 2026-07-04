@@ -15,8 +15,12 @@ final class Planner
      * @param string|null $persona identity/role framing supplied by the caller
      *        (e.g. Semitexa OS injects who the assistant is and who it serves).
      *        When null, a generic framework-assistant framing is used.
+     * @param \DateTimeZone|null $timezone the USER's wall-clock timezone for the
+     *        date anchor. The server usually runs in UTC, so around midnight a
+     *        server-time anchor makes the model resolve "tomorrow"/"завтра" to
+     *        the wrong day. Null keeps the server default (legacy behavior).
      */
-    public function buildSystemPrompt(SkillManifest $manifest, ?string $persona = null): string
+    public function buildSystemPrompt(SkillManifest $manifest, ?string $persona = null, ?\DateTimeZone $timezone = null): string
     {
         $skillsPrompt = $manifest->toCompactPrompt();
         $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.';
@@ -30,7 +34,7 @@ final class Planner
         // matching prompt PREFIX. Putting a volatile value up top would bust the
         // whole (large, static) skills prefix cache every minute; at the tail only
         // this short suffix re-computes, so consecutive turns reuse the prefill.
-        $now = new \DateTimeImmutable();
+        $now = new \DateTimeImmutable('now', $timezone);
         $nowLine = 'Current date and time: ' . $now->format('l, j F Y, H:i')
             . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
             . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
@@ -69,7 +73,14 @@ Rules:
 PROMPT;
     }
 
-    public function parseResponse(LlmResponse $response, string $rawUserMessage = ''): PlannerResponse
+    /**
+     * @param SkillManifest|null $manifest when given, an unrecognized `type` that
+     *        actually names a manifest skill is salvaged into a skill proposal —
+     *        smaller models routinely emit `{"type":"remember",...}` instead of
+     *        `{"type":"propose_skill","skill":"remember",...}`, and refusing such
+     *        a reply throws away a perfectly routable intent.
+     */
+    public function parseResponse(LlmResponse $response, string $rawUserMessage = '', ?SkillManifest $manifest = null): PlannerResponse
     {
         if (!$response->success) {
             return new PlannerResponse(
@@ -93,6 +104,11 @@ PROMPT;
 
         $type = PlannerResponseType::tryFrom((string) $decoded['type']);
         if ($type === null) {
+            $salvaged = $this->salvageSkillProposal($decoded, $manifest);
+            if ($salvaged !== null) {
+                return $salvaged;
+            }
+
             return new PlannerResponse(
                 type: PlannerResponseType::Refuse,
                 reason: 'Unrecognized response type: ' . $decoded['type'],
@@ -108,6 +124,37 @@ PROMPT;
             confidence: isset($decoded['confidence']) ? (float) $decoded['confidence'] : null,
             message: isset($decoded['message']) ? (string) $decoded['message'] : null,
             steps: $this->parseSteps($decoded['steps'] ?? null),
+        );
+    }
+
+    /**
+     * Model-drift salvage: the reply's `type` is not one of ours, but if it (or
+     * an explicit `skill` field next to it) names a skill that EXISTS in the
+     * manifest, the model clearly meant a proposal — route it as one. Without a
+     * manifest to check against, nothing is coerced (no false positives), which
+     * also keeps every legacy `parseResponse()` call byte-identical in behavior.
+     *
+     * @param array<string, mixed> $decoded
+     */
+    private function salvageSkillProposal(array $decoded, ?SkillManifest $manifest): ?PlannerResponse
+    {
+        if ($manifest === null) {
+            return null;
+        }
+
+        $skillField = trim((string) ($decoded['skill'] ?? ''));
+        $candidate = $skillField !== '' ? $skillField : trim((string) $decoded['type']);
+        if ($candidate === '' || $manifest->findSkill($candidate) === null) {
+            return null;
+        }
+
+        return new PlannerResponse(
+            type: PlannerResponseType::ProposeSkill,
+            skill: $candidate,
+            arguments: is_array($decoded['arguments'] ?? null) ? $decoded['arguments'] : [],
+            reason: 'Salvaged: model answered with skill name "' . $candidate . '" as the response type.',
+            confidence: isset($decoded['confidence']) ? (float) $decoded['confidence'] : null,
+            message: isset($decoded['message']) ? (string) $decoded['message'] : null,
         );
     }
 

@@ -115,7 +115,7 @@ final class AiAssistantCommand extends Command
             $io->text('<comment>Thinking...</comment>');
 
             $llmResponse = $provider->complete($request);
-            $plannerResponse = $planner->parseResponse($llmResponse);
+            $plannerResponse = $planner->parseResponse($llmResponse, manifest: $manifest);
 
             if ($output->isVerbose() && !$llmResponse->success) {
                 $io->text(sprintf('<fg=yellow>[debug] LLM error: %s</>', $llmResponse->error ?? 'unknown'));
