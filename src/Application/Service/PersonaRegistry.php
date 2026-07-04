@@ -57,7 +57,6 @@ final class PersonaRegistry
         if ($this->built) {
             return;
         }
-        $this->built = true;
 
         foreach ($this->classDiscovery()->findClassesWithAttribute(AsAiPersona::class) as $class) {
             $ref = new ReflectionClass($class);
@@ -77,6 +76,13 @@ final class PersonaRegistry
                 $this->defaultContext = $meta->context;
             }
         }
+
+        // Flag LAST: findClassesWithAttribute() autoloads (file IO — a coroutine
+        // suspension point under SWOOLE_HOOK_ALL), so flag-first would let a
+        // concurrent caller on a SHARED instance observe an empty registry and
+        // silently resolve no persona. Instances are per-use today, but this
+        // class reads like a service — same lesson as OrmManager::getMapperRegistry.
+        $this->built = true;
     }
 
     private function classDiscovery(): ClassDiscovery
