@@ -54,7 +54,23 @@ final readonly class SkillManifest
                 return $skill;
             }
         }
+
+        // Model drift tolerance: planners routinely emit 'attach_folder' for
+        // 'attach-folder' (or vary case). Normalise separators and case before
+        // giving up — names stay canonical, only the LOOKUP is forgiving.
+        $loose = self::looseName($name);
+        foreach ($this->skills as $skill) {
+            if (self::looseName($skill->name) === $loose) {
+                return $skill;
+            }
+        }
+
         return null;
+    }
+
+    private static function looseName(string $name): string
+    {
+        return strtolower(str_replace('_', '-', trim($name)));
     }
 
     public function toCompactPrompt(): string
