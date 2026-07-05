@@ -120,15 +120,17 @@ final class SkillRegistry
                 icon: $skill->icon,
                 entry: $skill->entry,
             );
-        } catch (\ValueError $e) {
+        } catch (\Throwable $e) {
+            // A skill that can't be built is dropped from the manifest — whether
+            // from bad metadata (a ValueError) or a missing/miswired constructor
+            // dependency (a TypeError/container error). Never drop it silently:
+            // a vanished skill otherwise surfaces only as "the assistant can't do
+            // X" with no signal. Log it so the misconfiguration is diagnosable.
             $this->logger?->warning('Failed to build skill manifest entry', [
                 'class' => $className,
                 'exception' => $e::class,
                 'message' => $e->getMessage(),
             ]);
-            return null;
-        } catch (\Throwable) {
-            // Non-ValueError failures (e.g. missing constructor deps) are silently skipped
             return null;
         }
     }

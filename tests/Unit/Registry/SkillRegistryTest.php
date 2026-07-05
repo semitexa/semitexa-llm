@@ -6,6 +6,7 @@ namespace Semitexa\Llm\Tests\Unit\Registry;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
 use Semitexa\Llm\Domain\Enum\AiRiskLevel;
@@ -102,6 +103,27 @@ final class SkillRegistryTest extends TestCase
             putenv('TEST_LLM_SKILL_ENABLED');
         }
     }
+
+    public function test_a_skill_that_fails_to_build_is_logged_not_silently_dropped(): void
+    {
+        // A skill dropped from the manifest for ANY reason (bad metadata, or a
+        // missing/miswired dependency that makes it unbuildable) must be logged,
+        // not vanish silently — otherwise it surfaces only as "the assistant
+        // can't do X" with no signal. A non-existent class name reflects that
+        // failure mode deterministically (ReflectionException — a non-ValueError
+        // Throwable, the branch that used to be silent).
+        $logger = new CapturingLogger();
+        $registry = new SkillRegistry(null, $logger);
+
+        $manifest = $registry->buildManifestFromClasses(['Semitexa\\Llm\\Tests\\Unit\\Registry\\NoSuchSkill_Missing']);
+
+        $this->assertCount(0, $manifest->skills);
+        $this->assertCount(1, $logger->warnings, 'a dropped skill must be logged, not silently skipped');
+        [$message, $context] = $logger->warnings[0];
+        $this->assertSame('Failed to build skill manifest entry', $message);
+        $this->assertStringContainsString('NoSuchSkill_Missing', (string) $context['class']);
+        $this->assertStringContainsString('ReflectionException', (string) $context['exception']);
+    }
 }
 
 // --- Test fixtures ---
@@ -183,4 +205,22 @@ final class EnvControlledSkillCommand extends Command
     {
         return Command::SUCCESS;
     }
+}
+
+final class CapturingLogger implements LoggerInterface
+{
+    /** @var list<array{0: string, 1: array<string, mixed>}> */
+    public array $warnings = [];
+
+    public function error(string $message, array $context = []): void {}
+    public function critical(string $message, array $context = []): void {}
+
+    public function warning(string $message, array $context = []): void
+    {
+        $this->warnings[] = [$message, $context];
+    }
+
+    public function info(string $message, array $context = []): void {}
+    public function notice(string $message, array $context = []): void {}
+    public function debug(string $message, array $context = []): void {}
 }
