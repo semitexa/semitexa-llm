@@ -8,6 +8,7 @@ use ReflectionClass;
 use Semitexa\Core\Attribute\AsCommand;
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Llm\Attribute\AsAiSkill;
+use Semitexa\Llm\Domain\Contract\InvocableSkillInterface;
 use Semitexa\Llm\Domain\Model\SkillEntry;
 use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Domain\Model\SkillManifest;
@@ -65,20 +66,47 @@ final class SkillRegistry
                 return null;
             }
 
+            $inputs = $this->buildInputs($ref, $skill);
+
             $commandAttrs = $ref->getAttributes(AsCommand::class);
-            if ($commandAttrs === []) {
+            if ($commandAttrs !== []) {
+                /** @var AsCommand $commandAttr */
+                $commandAttr = $commandAttrs[0]->newInstance();
+
+                return new SkillEntry(
+                    name: $commandAttr->name,
+                    sourceCommand: $commandAttr->name,
+                    summary: $skill->summary ?? $commandAttr->description ?? '',
+                    useWhen: $skill->useWhen ?? '',
+                    avoidWhen: $skill->avoidWhen ?? '',
+                    riskLevel: $skill->resolvedRiskLevel,
+                    confirmation: $skill->resolvedConfirmation,
+                    supportsDryRun: $skill->supportsDryRun,
+                    argumentPolicy: $skill->resolvedArgumentPolicy,
+                    inputs: $inputs,
+                    channels: $skill->channels,
+                    executionKind: $skill->resolvedExecutionKind,
+                    skillClass: null,
+                    icon: $skill->icon,
+                    entry: $skill->entry,
+                );
+            }
+
+            // Non-command skill: lifts the #[AsCommand]-only constraint. Needs an
+            // explicit name and either an InvocableSkillInterface (it executes) or the
+            // 'ui' channel (a UI-skill that opens a dialog instead of executing).
+            $isUi = in_array('ui', $skill->channels, true);
+            if ($skill->name === null) {
+                return null;
+            }
+            if (!$isUi && !$ref->implementsInterface(InvocableSkillInterface::class)) {
                 return null;
             }
 
-            /** @var AsCommand $commandAttr */
-            $commandAttr = $commandAttrs[0]->newInstance();
-
-            $inputs = $this->buildInputs($ref, $skill);
-
             return new SkillEntry(
-                name: $commandAttr->name,
-                sourceCommand: $commandAttr->name,
-                summary: $skill->summary ?? $commandAttr->description ?? '',
+                name: $skill->name,
+                sourceCommand: null,
+                summary: $skill->summary ?? '',
                 useWhen: $skill->useWhen ?? '',
                 avoidWhen: $skill->avoidWhen ?? '',
                 riskLevel: $skill->resolvedRiskLevel,
@@ -88,16 +116,21 @@ final class SkillRegistry
                 inputs: $inputs,
                 channels: $skill->channels,
                 executionKind: $skill->resolvedExecutionKind,
+                skillClass: $className,
+                icon: $skill->icon,
+                entry: $skill->entry,
             );
-        } catch (\ValueError $e) {
+        } catch (\Throwable $e) {
+            // A skill that can't be built is dropped from the manifest — whether
+            // from bad metadata (a ValueError) or a missing/miswired constructor
+            // dependency (a TypeError/container error). Never drop it silently:
+            // a vanished skill otherwise surfaces only as "the assistant can't do
+            // X" with no signal. Log it so the misconfiguration is diagnosable.
             $this->logger?->warning('Failed to build skill manifest entry', [
                 'class' => $className,
                 'exception' => $e::class,
                 'message' => $e->getMessage(),
             ]);
-            return null;
-        } catch (\Throwable) {
-            // Non-ValueError failures (e.g. missing constructor deps) are silently skipped
             return null;
         }
     }
@@ -124,12 +157,21 @@ final class SkillRegistry
         $inputs = [];
         foreach ($argsToExpose as $argName) {
             $required = in_array($argName, $skill->requiredArguments, true);
-            $meta = $optionMetadata[$argName] ?? ['type' => 'flag', 'description' => ''];
+            // Console options carry their own type + description; invocable-skill
+            // arguments have no option source, so a declared argumentHint (see
+            // AsAiSkill) turns them into a described string input instead of a
+            // bare "flag" the model has to guess at.
+            $meta = $optionMetadata[$argName]
+                ?? (isset($skill->argumentHints[$argName])
+                    ? ['type' => 'string', 'description' => $skill->argumentHints[$argName]]
+                    : ['type' => 'flag', 'description' => '']);
 
             $inputs[$argName] = [
                 'type' => $meta['type'],
                 'required' => $required,
-                'description' => $meta['description'],
+                'description' => ($meta['description'] === '' && isset($skill->argumentHints[$argName]))
+                    ? $skill->argumentHints[$argName]
+                    : $meta['description'],
             ];
         }
 

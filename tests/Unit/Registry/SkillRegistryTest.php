@@ -6,6 +6,7 @@ namespace Semitexa\Llm\Tests\Unit\Registry;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
 use Semitexa\Llm\Domain\Enum\AiRiskLevel;
@@ -74,6 +75,21 @@ final class SkillRegistryTest extends TestCase
         $this->assertSame('stub:command', $manifest->skills[1]->name);
     }
 
+    public function test_invocable_skill_argument_hints_become_described_string_inputs(): void
+    {
+        $registry = new SkillRegistry();
+        $manifest = $registry->buildManifestFromClasses([HintedInvocableSkill::class]);
+
+        $this->assertCount(1, $manifest->skills);
+        $skill = $manifest->skills[0];
+
+        $this->assertSame('string', $skill->inputs['what']['type']);
+        $this->assertSame('The short NAME only.', $skill->inputs['what']['description']);
+        // No hint declared → the legacy bare-flag fallback is untouched.
+        $this->assertSame('flag', $skill->inputs['kind']['type']);
+        $this->assertSame('', $skill->inputs['kind']['description']);
+    }
+
     public function test_env_disabled_skill_is_excluded(): void
     {
         putenv('TEST_LLM_SKILL_ENABLED=0');
@@ -86,6 +102,27 @@ final class SkillRegistryTest extends TestCase
         } finally {
             putenv('TEST_LLM_SKILL_ENABLED');
         }
+    }
+
+    public function test_a_skill_that_fails_to_build_is_logged_not_silently_dropped(): void
+    {
+        // A skill dropped from the manifest for ANY reason (bad metadata, or a
+        // missing/miswired dependency that makes it unbuildable) must be logged,
+        // not vanish silently — otherwise it surfaces only as "the assistant
+        // can't do X" with no signal. A non-existent class name reflects that
+        // failure mode deterministically (ReflectionException — a non-ValueError
+        // Throwable, the branch that used to be silent).
+        $logger = new CapturingLogger();
+        $registry = new SkillRegistry(null, $logger);
+
+        $manifest = $registry->buildManifestFromClasses(['Semitexa\\Llm\\Tests\\Unit\\Registry\\NoSuchSkill_Missing']);
+
+        $this->assertCount(0, $manifest->skills);
+        $this->assertCount(1, $logger->warnings, 'a dropped skill must be logged, not silently skipped');
+        [$message, $context] = $logger->warnings[0];
+        $this->assertSame('Failed to build skill manifest entry', $message);
+        $this->assertStringContainsString('NoSuchSkill_Missing', (string) $context['class']);
+        $this->assertStringContainsString('ReflectionException', (string) $context['exception']);
     }
 }
 
@@ -140,6 +177,26 @@ final class AnotherStubSkillCommand extends Command
     }
 }
 
+#[AsAiSkill(
+    allowed: true,
+    name: 'hinted',
+    summary: 'Invocable skill with argument hints.',
+    useWhen: 'Testing.',
+    avoidWhen: 'Production.',
+    confirmation: AiConfirmationMode::Never,
+    argumentPolicy: 'allowlisted',
+    exposeArguments: ['what', 'kind'],
+    argumentHints: ['what' => 'The short NAME only.'],
+    channels: ['web'],
+)]
+final class HintedInvocableSkill implements \Semitexa\Llm\Domain\Contract\InvocableSkillInterface
+{
+    public function invoke(array $arguments): string
+    {
+        return 'ok';
+    }
+}
+
 #[AsCommand(name: 'env:controlled', description: 'Env-controlled skill')]
 #[AsAiSkill(allowed: 'env::TEST_LLM_SKILL_ENABLED::true', summary: 'Enabled only when env flag allows it.')]
 final class EnvControlledSkillCommand extends Command
@@ -148,4 +205,22 @@ final class EnvControlledSkillCommand extends Command
     {
         return Command::SUCCESS;
     }
+}
+
+final class CapturingLogger implements LoggerInterface
+{
+    /** @var list<array{0: string, 1: array<string, mixed>}> */
+    public array $warnings = [];
+
+    public function error(string $message, array $context = []): void {}
+    public function critical(string $message, array $context = []): void {}
+
+    public function warning(string $message, array $context = []): void
+    {
+        $this->warnings[] = [$message, $context];
+    }
+
+    public function info(string $message, array $context = []): void {}
+    public function notice(string $message, array $context = []): void {}
+    public function debug(string $message, array $context = []): void {}
 }

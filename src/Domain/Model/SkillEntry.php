@@ -27,7 +27,7 @@ final readonly class SkillEntry
      */
     public function __construct(
         public string $name,
-        public string $sourceCommand,
+        public ?string $sourceCommand,
         public string $summary,
         public string $useWhen,
         public string $avoidWhen,
@@ -38,7 +38,25 @@ final readonly class SkillEntry
         public array $inputs,
         public array $channels,
         public AiExecutionKind $executionKind,
+        /**
+         * FQCN of a non-command {@see \Semitexa\Llm\Domain\Contract\InvocableSkillInterface}
+         * skill. Null for console/command skills (which carry sourceCommand instead).
+         */
+        public ?string $skillClass = null,
+        /** UI-skill: icon shown in Focus / launchers (null for non-UI skills). */
+        public ?string $icon = null,
+        /** UI-skill: entry route whose GET response renders inside the dialog. */
+        public ?string $entry = null,
     ) {}
+
+    /**
+     * A UI-skill raises a persistent interactive dialog surface (Focus), rather
+     * than returning one-shot output. Marked by the `'ui'` channel.
+     */
+    public function isUi(): bool
+    {
+        return in_array('ui', $this->channels, true);
+    }
 
     public function toArray(): array
     {
@@ -55,6 +73,10 @@ final readonly class SkillEntry
             'inputs' => $this->inputs,
             'channels' => $this->channels,
             'execution_kind' => $this->executionKind->value,
+            'skill_class' => $this->skillClass,
+            'icon' => $this->icon,
+            'entry' => $this->entry,
+            'is_ui' => $this->isUi(),
         ];
     }
 }

@@ -26,6 +26,14 @@ final class RemoteOllamaProvider implements LlmProviderInterface
     #[Config(env: 'LLM_REMOTE_OLLAMA_RETRIES', default: 2)]
     protected int $maxRetries;
 
+    /**
+     * Clone-only tuning (never injected). null $maxTokens = no `num_predict` cap;
+     * $thinking = false sends `think:false` so a thinking-capable model spends its
+     * token budget on the answer, not on a reasoning trace we don't consume.
+     */
+    protected ?int $maxTokens = null;
+    protected bool $thinking = true;
+
     public function name(): string
     {
         return 'remote_ollama';
@@ -39,6 +47,23 @@ final class RemoteOllamaProvider implements LlmProviderInterface
     public function model(): string
     {
         return $this->model;
+    }
+
+    /**
+     * A clone with a bounded per-call timeout + retry count (and, optionally, a
+     * `num_predict` cap and thinking toggle) — for callers that must not hang a
+     * request on a slow model (e.g. the skin seed picker, which asks for one short
+     * answer then falls back). The shared worker provider keeps its own limits.
+     */
+    public function withLimits(int $timeoutSeconds, int $maxRetries, ?int $maxTokens = null, bool $thinking = true): self
+    {
+        $c = clone $this;
+        $c->timeout = max(1, $timeoutSeconds);
+        $c->maxRetries = max(0, $maxRetries);
+        $c->maxTokens = $maxTokens !== null ? max(1, $maxTokens) : null;
+        $c->thinking = $thinking;
+
+        return $c;
     }
 
     public function healthCheck(): bool
@@ -82,11 +107,21 @@ final class RemoteOllamaProvider implements LlmProviderInterface
 
         $messages[] = ['role' => 'user', 'content' => $request->userMessage];
 
-        $payload = json_encode([
+        $body = [
             'model' => $this->model,
             'messages' => $messages,
             'stream' => false,
-        ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        ];
+        if ($this->maxTokens !== null) {
+            $body['options'] = ['num_predict' => $this->maxTokens];
+        }
+        if (!$this->thinking) {
+            // Only sent when explicitly disabled — a thinking-capable model would
+            // otherwise burn a small num_predict budget on the reasoning trace.
+            $body['think'] = false;
+        }
+
+        $payload = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 
         if ($payload === false) {
             return new LlmResponse(

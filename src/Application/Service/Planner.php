@@ -11,12 +11,36 @@ use Semitexa\Llm\Domain\Model\SkillManifest;
 
 final class Planner
 {
-    public function buildSystemPrompt(SkillManifest $manifest): string
+    /**
+     * @param string|null $persona identity/role framing supplied by the caller
+     *        (e.g. Semitexa OS injects who the assistant is and who it serves).
+     *        When null, a generic framework-assistant framing is used.
+     * @param \DateTimeZone|null $timezone the USER's wall-clock timezone for the
+     *        date anchor. The server usually runs in UTC, so around midnight a
+     *        server-time anchor makes the model resolve "tomorrow"/"завтра" to
+     *        the wrong day. Null keeps the server default (legacy behavior).
+     */
+    public function buildSystemPrompt(SkillManifest $manifest, ?string $persona = null, ?\DateTimeZone $timezone = null): string
     {
         $skillsPrompt = $manifest->toCompactPrompt();
+        $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.';
+
+        // Give the model an absolute time anchor so it can resolve relative dates
+        // ("today", "tomorrow", "next Friday", "завтра") into concrete values
+        // instead of passing language-specific phrases downstream skills can't parse.
+        //
+        // This line is kept at the very END of the prompt on purpose: it changes
+        // every minute, and an LLM runtime (Ollama) caches the KV of the longest
+        // matching prompt PREFIX. Putting a volatile value up top would bust the
+        // whole (large, static) skills prefix cache every minute; at the tail only
+        // this short suffix re-computes, so consecutive turns reuse the prefill.
+        $now = new \DateTimeImmutable('now', $timezone);
+        $nowLine = 'Current date and time: ' . $now->format('l, j F Y, H:i')
+            . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
+            . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
 
         return <<<PROMPT
-You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.
+{$persona}
 
 {$skillsPrompt}
 
@@ -31,19 +55,32 @@ Clarification question:
 Propose a skill:
 {"type":"propose_skill","skill":"skill-name","arguments":{},"reason":"Why this skill matches.","confidence":0.9}
 
+Propose a pipeline (an ordered chain of skills run in sequence — ONLY when the request genuinely needs several skills one after another):
+{"type":"propose_pipeline","steps":[{"skill":"skill-a","arguments":{}},{"skill":"skill-b","arguments":{}}],"reason":"Why this chain.","confidence":0.8}
+
 Refuse:
 {"type":"refuse","message":"Why you cannot help.","reason":"Safety or policy reason."}
 
 Rules:
 - Only propose skills from the list above. Never invent skill names or argument names.
+- Prefer a single propose_skill; use propose_pipeline only when one skill must follow another.
 - Arguments must only use names listed in the skill inputs.
 - If the request is ambiguous, ask for clarification.
 - If no skill matches, answer directly or refuse.
 - Output valid JSON only. No markdown, no code fences, no extra text.
+
+{$nowLine}
 PROMPT;
     }
 
-    public function parseResponse(LlmResponse $response, string $rawUserMessage = ''): PlannerResponse
+    /**
+     * @param SkillManifest|null $manifest when given, an unrecognized `type` that
+     *        actually names a manifest skill is salvaged into a skill proposal —
+     *        smaller models routinely emit `{"type":"remember",...}` instead of
+     *        `{"type":"propose_skill","skill":"remember",...}`, and refusing such
+     *        a reply throws away a perfectly routable intent.
+     */
+    public function parseResponse(LlmResponse $response, string $rawUserMessage = '', ?SkillManifest $manifest = null): PlannerResponse
     {
         if (!$response->success) {
             return new PlannerResponse(
@@ -67,6 +104,11 @@ PROMPT;
 
         $type = PlannerResponseType::tryFrom((string) $decoded['type']);
         if ($type === null) {
+            $salvaged = $this->salvageSkillProposal($decoded, $manifest);
+            if ($salvaged !== null) {
+                return $salvaged;
+            }
+
             return new PlannerResponse(
                 type: PlannerResponseType::Refuse,
                 reason: 'Unrecognized response type: ' . $decoded['type'],
@@ -81,7 +123,65 @@ PROMPT;
             reason: isset($decoded['reason']) ? (string) $decoded['reason'] : '',
             confidence: isset($decoded['confidence']) ? (float) $decoded['confidence'] : null,
             message: isset($decoded['message']) ? (string) $decoded['message'] : null,
+            steps: $this->parseSteps($decoded['steps'] ?? null),
         );
+    }
+
+    /**
+     * Model-drift salvage: the reply's `type` is not one of ours, but if it (or
+     * an explicit `skill` field next to it) names a skill that EXISTS in the
+     * manifest, the model clearly meant a proposal — route it as one. Without a
+     * manifest to check against, nothing is coerced (no false positives), which
+     * also keeps every legacy `parseResponse()` call byte-identical in behavior.
+     *
+     * @param array<string, mixed> $decoded
+     */
+    private function salvageSkillProposal(array $decoded, ?SkillManifest $manifest): ?PlannerResponse
+    {
+        if ($manifest === null) {
+            return null;
+        }
+
+        $skillField = trim((string) ($decoded['skill'] ?? ''));
+        $candidate = $skillField !== '' ? $skillField : trim((string) $decoded['type']);
+        if ($candidate === '' || $manifest->findSkill($candidate) === null) {
+            return null;
+        }
+
+        return new PlannerResponse(
+            type: PlannerResponseType::ProposeSkill,
+            skill: $candidate,
+            arguments: is_array($decoded['arguments'] ?? null) ? $decoded['arguments'] : [],
+            reason: 'Salvaged: model answered with skill name "' . $candidate . '" as the response type.',
+            confidence: isset($decoded['confidence']) ? (float) $decoded['confidence'] : null,
+            message: isset($decoded['message']) ? (string) $decoded['message'] : null,
+        );
+    }
+
+    /**
+     * Normalise a raw `steps` array into a clean ordered skill chain.
+     *
+     * @return list<array{skill: string, arguments: array<string, mixed>}>
+     */
+    private function parseSteps(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $steps = [];
+        foreach ($raw as $step) {
+            if (!is_array($step) || !isset($step['skill'])) {
+                continue;
+            }
+
+            $steps[] = [
+                'skill' => (string) $step['skill'],
+                'arguments' => is_array($step['arguments'] ?? null) ? $step['arguments'] : [],
+            ];
+        }
+
+        return $steps;
     }
 
     /**

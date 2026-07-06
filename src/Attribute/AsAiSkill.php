@@ -38,6 +38,32 @@ final class AsAiSkill
         public array $requiredArguments = [],
         public AiExecutionKind|string $executionKind = AiExecutionKind::DirectCommand,
         public array $channels = ['console'],
+        /**
+         * Skill name for non-command skills (classes without `#[AsCommand]` that
+         * implement {@see \Semitexa\Llm\Domain\Contract\InvocableSkillInterface}).
+         * Command skills leave this null and take their name from the command.
+         */
+        public ?string $name = null,
+        /**
+         * UI-skill: an icon (Lucide name or glyph) shown in Focus / launchers.
+         * Presence of the `'ui'` channel marks the skill as raising a dialog.
+         */
+        public ?string $icon = null,
+        /**
+         * UI-skill: the entry route/path whose GET response renders inside the
+         * dialog surface (e.g. '/os/app/notes'). Hosted by the Focus zone.
+         */
+        public ?string $entry = null,
+        /**
+         * Per-argument guidance shown to the planner (argName => one-line hint).
+         * Command skills inherit descriptions from their console option
+         * definitions automatically; invocable skills have no such source, so
+         * without hints their inputs render bare and the model guesses what to
+         * put in them (e.g. a whole sentence where a short name was expected).
+         *
+         * @var array<string, string>
+         */
+        public array $argumentHints = [],
     ) {
         $this->resolvedAllowed = $this->resolveAllowed($allowed);
 
