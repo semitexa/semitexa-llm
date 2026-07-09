@@ -8,4 +8,5 @@ enum LlmBackend: string
 {
     case Local = 'local';
     case RemoteOllama = 'remote_ollama';
+    case Gemini = 'gemini';
 }

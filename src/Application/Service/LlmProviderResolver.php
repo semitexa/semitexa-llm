@@ -12,10 +12,11 @@ use Semitexa\Llm\Domain\Enum\LlmBackend;
 
 /**
  * Selects the active LLM provider from the `LLM_BACKEND` env
- * (`local` | `remote_ollama`), defaulting to local on an unset/unknown value.
+ * (`local` | `remote_ollama` | `gemini`), defaulting to local on an unset/unknown
+ * value.
  *
  * This is the canonical, env-aware seam every consumer should use. We inject the
- * two concrete providers directly rather than the generated factory contract:
+ * concrete providers directly rather than the generated factory contract:
  * `FactoryLlmProviderInterface` is not a regular injectable binding, and the
  * generated `App\Registry\Contracts\LlmProviderFactory` lives in the app
  * namespace (a package cannot depend on it). Injecting a bare
@@ -32,11 +33,16 @@ final class LlmProviderResolver
     #[InjectAsReadonly]
     protected RemoteOllamaProvider $remote;
 
+    #[InjectAsReadonly]
+    protected GeminiProvider $gemini;
+
     public function provider(): LlmProviderInterface
     {
-        return $this->backend() === LlmBackend::RemoteOllama
-            ? $this->remote
-            : $this->local;
+        return match ($this->backend()) {
+            LlmBackend::RemoteOllama => $this->remote,
+            LlmBackend::Gemini => $this->gemini,
+            LlmBackend::Local => $this->local,
+        };
     }
 
     public function backend(): LlmBackend
