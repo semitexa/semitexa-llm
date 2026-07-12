@@ -100,10 +100,15 @@ PROMPT;
         $summary = trim((string) ($decoded['summary'] ?? ''));
         $intent = trim((string) ($decoded['active_intent'] ?? ''));
 
-        // Never let a degenerate empty summary erase real prior context.
+        // Never let a degenerate empty summary/intent erase real prior context —
+        // a missing key and an explicit "" both decode to '' here, so an omitted
+        // active_intent can't be told apart from the model's deliberate "no
+        // ongoing task" signal. Falling back to the prior value on either is the
+        // safe read: the worst case is one stale turn's lag, not silently losing
+        // a real in-progress intent to a model that simply left the field out.
         return [
             'summary' => $summary !== '' ? $summary : $priorSummary,
-            'active_intent' => $intent,
+            'active_intent' => $intent !== '' ? $intent : $priorIntent,
             'changed' => true,
         ];
     }

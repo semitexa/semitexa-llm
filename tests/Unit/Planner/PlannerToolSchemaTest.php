@@ -94,12 +94,14 @@ final class PlannerToolSchemaTest extends TestCase
             $this->manifest,
         );
         self::assertSame(PlannerResponseType::Ask, $ask->type);
+        self::assertSame('Which one?', $ask->message);
 
         $refuse = $this->schema->mapToolCall(
             ['name' => PlannerToolSchema::REFUSE, 'arguments' => ['message' => 'No.']],
             $this->manifest,
         );
         self::assertSame(PlannerResponseType::Refuse, $refuse->type);
+        self::assertSame('No.', $refuse->message);
     }
 
     public function test_unknown_tool_name_refuses_rather_than_guessing(): void
@@ -110,6 +112,82 @@ final class PlannerToolSchemaTest extends TestCase
         );
 
         self::assertSame(PlannerResponseType::Refuse, $response->type);
+    }
+
+    /**
+     * Two distinct skill names that collapse to the SAME sanitized string
+     * (`os:status` and `os_status` both become `os_status`) must still resolve to
+     * two distinct, correctly-routable tools — not silently collapse to one.
+     */
+    public function test_punctuation_collision_disambiguates_both_skills(): void
+    {
+        $manifest = new SkillManifest('test', 'now', [
+            $this->skill('os:status', inputs: []),
+            $this->skill('os_status', inputs: []),
+        ]);
+
+        $names = array_column($this->schema->declarationsFor($manifest), 'name');
+        self::assertContains('os_status', $names);
+        self::assertContains('os_status_2', $names);
+
+        $first = $this->schema->mapToolCall(['name' => 'os_status', 'arguments' => []], $manifest);
+        self::assertSame('os:status', $first->skill);
+
+        $second = $this->schema->mapToolCall(['name' => 'os_status_2', 'arguments' => []], $manifest);
+        self::assertSame('os_status', $second->skill);
+    }
+
+    /**
+     * Two long skill names that differ only after Gemini's 64-char cap (so their
+     * sanitized forms collide on the truncated prefix) must also disambiguate.
+     */
+    public function test_64_char_prefix_collision_disambiguates_both_skills(): void
+    {
+        $prefix = str_repeat('a', 64);
+        $manifest = new SkillManifest('test', 'now', [
+            $this->skill($prefix . '-first', inputs: []),
+            $this->skill($prefix . '-second', inputs: []),
+        ]);
+
+        $names = array_column($this->schema->declarationsFor($manifest), 'name');
+        self::assertContains($prefix, $names);
+        self::assertContains(substr($prefix, 0, 62) . '_2', $names);
+
+        $second = $this->schema->mapToolCall(
+            ['name' => substr($prefix, 0, 62) . '_2', 'arguments' => []],
+            $manifest,
+        );
+        self::assertSame($prefix . '-second', $second->skill);
+    }
+
+    /**
+     * A skill literally named after a meta tool must never shadow it — the meta
+     * tool call always wins, and the skill gets a disambiguated name instead.
+     */
+    public function test_skill_named_like_a_meta_tool_does_not_shadow_it(): void
+    {
+        $manifest = new SkillManifest('test', 'now', [
+            $this->skill(PlannerToolSchema::FINAL_ANSWER, inputs: []),
+        ]);
+
+        $names = array_column($this->schema->declarationsFor($manifest), 'name');
+        self::assertContains(PlannerToolSchema::FINAL_ANSWER, $names);
+        self::assertContains(PlannerToolSchema::FINAL_ANSWER . '_2', $names);
+
+        // The reserved name still maps to the real meta tool, not the skill.
+        $metaCall = $this->schema->mapToolCall(
+            ['name' => PlannerToolSchema::FINAL_ANSWER, 'arguments' => ['message' => 'Done.']],
+            $manifest,
+        );
+        self::assertSame(PlannerResponseType::Answer, $metaCall->type);
+
+        // The skill is still reachable under its disambiguated name.
+        $skillCall = $this->schema->mapToolCall(
+            ['name' => PlannerToolSchema::FINAL_ANSWER . '_2', 'arguments' => []],
+            $manifest,
+        );
+        self::assertSame(PlannerResponseType::ProposeSkill, $skillCall->type);
+        self::assertSame(PlannerToolSchema::FINAL_ANSWER, $skillCall->skill);
     }
 
     /**

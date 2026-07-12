@@ -29,6 +29,9 @@ final class PlannerToolSchema
     public const ASK_USER = 'ask_user';
     public const REFUSE = 'refuse_request';
 
+    /** Reserved for the meta tools — a skill can never shadow one of these. */
+    private const RESERVED_NAMES = [self::FINAL_ANSWER, self::ASK_USER, self::REFUSE];
+
     /**
      * Function declarations for the manifest's skills plus the answer/ask/refuse
      * meta tools, in the provider-agnostic shape {@see \Semitexa\Llm\Domain\Model\LlmRequest::$tools}
@@ -38,10 +41,11 @@ final class PlannerToolSchema
      */
     public function declarationsFor(SkillManifest $manifest): array
     {
+        $names = $this->assignedNames($manifest);
         $declarations = [];
 
         foreach ($manifest->skills as $skill) {
-            $declarations[] = $this->skillDeclaration($skill);
+            $declarations[] = $this->skillDeclaration($skill, $names[$skill->name]);
         }
 
         $declarations[] = $this->metaDeclaration(
@@ -66,9 +70,10 @@ final class PlannerToolSchema
     /**
      * Map a provider tool call ({name, arguments}) back to a {@see PlannerResponse}.
      * The meta tools become answer/ask/refuse; anything else is resolved to the
-     * canonical skill name (tool names are sanitized, so a reverse lookup against
-     * the manifest is required — `os_design-skin` → `os:design-skin`). An unknown
-     * tool name refuses rather than guessing.
+     * canonical skill name via {@see resolveSkillName()} (tool names are sanitized
+     * — and disambiguated on collision — so a reverse lookup against the manifest
+     * is required, e.g. `os_design-skin` → `os:design-skin`). An unknown tool name
+     * refuses rather than guessing.
      *
      * @param array{name: string, arguments: array<string, mixed>} $toolCall
      */
@@ -125,7 +130,7 @@ final class PlannerToolSchema
     /**
      * @return array{name: string, description: string, parameters: array<string, mixed>}
      */
-    private function skillDeclaration(SkillEntry $skill): array
+    private function skillDeclaration(SkillEntry $skill, string $toolName): array
     {
         $description = $skill->summary;
         if ($skill->useWhen !== '') {
@@ -155,7 +160,7 @@ final class PlannerToolSchema
         }
 
         return [
-            'name' => self::sanitizeName($skill->name),
+            'name' => $toolName,
             'description' => $description,
             'parameters' => $parameters,
         ];
@@ -181,10 +186,9 @@ final class PlannerToolSchema
 
     private function resolveSkillName(string $toolName, SkillManifest $manifest): ?string
     {
-        foreach ($manifest->skills as $skill) {
-            if (self::sanitizeName($skill->name) === $toolName) {
-                return $skill->name;
-            }
+        $canonical = array_search($toolName, $this->assignedNames($manifest), true);
+        if ($canonical !== false) {
+            return $canonical;
         }
 
         // Fall back to the manifest's own drift-tolerant lookup (handles case /
@@ -193,14 +197,60 @@ final class PlannerToolSchema
     }
 
     /**
+     * Deterministically assigns every manifest skill a UNIQUE Gemini-safe tool
+     * name. Plain {@see sanitizeName()} is lossy — distinct names can collapse to
+     * the same sanitized form (`os:status` and `os_status` both become
+     * `os_status`), or share the same 64-char prefix once truncated — so a bare
+     * reverse lookup would silently resolve every colliding name to whichever
+     * skill happens to come first in the manifest, routing a tool call to the
+     * WRONG skill. `RESERVED_NAMES` is seeded first so a skill can never shadow a
+     * meta tool either. Any later collision gets a numeric suffix instead.
+     *
+     * Pure function of `$manifest` (skills in a fixed, stable order) — this is
+     * called separately by {@see declarationsFor()} (building declarations) and
+     * {@see resolveSkillName()} (mapping a call back), typically on two different
+     * instances, so both computations must independently agree on the same
+     * assignment rather than relying on shared instance state.
+     *
+     * @return array<string, string> skill name (canonical) => assigned tool name
+     */
+    private function assignedNames(SkillManifest $manifest): array
+    {
+        $used = array_fill_keys(self::RESERVED_NAMES, true);
+        $assigned = [];
+
+        foreach ($manifest->skills as $skill) {
+            $base = self::sanitizeName($skill->name);
+            $candidate = $base;
+            for ($suffix = 2; isset($used[$candidate]); $suffix++) {
+                $candidate = self::withSuffix($base, (string) $suffix);
+            }
+            $used[$candidate] = true;
+            $assigned[$skill->name] = $candidate;
+        }
+
+        return $assigned;
+    }
+
+    /**
      * Function names must match Gemini's `[A-Za-z0-9_.-]` charset (skill names like
-     * `os:design-skin` and `cache:clear` carry a colon), capped at 64 chars.
+     * `os:design-skin` and `cache:clear` carry a colon), capped at 64 chars. Lossy
+     * by itself (collisions are possible) — always go through
+     * {@see assignedNames()} for the collision-free name actually declared/resolved.
      */
     private static function sanitizeName(string $name): string
     {
         $sanitized = preg_replace('/[^A-Za-z0-9_.-]/', '_', $name) ?? $name;
 
         return substr($sanitized, 0, 64);
+    }
+
+    /** Append a disambiguating suffix, re-truncating so the result stays ≤ 64 chars. */
+    private static function withSuffix(string $base, string $suffix): string
+    {
+        $suffix = '_' . $suffix;
+
+        return substr($base, 0, 64 - strlen($suffix)) . $suffix;
     }
 
     private static function schemaType(string $inputType): string
