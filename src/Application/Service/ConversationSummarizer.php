@@ -47,7 +47,11 @@ PROMPT;
 
     /**
      * @param list<array{role: string, content: string}> $agingTurns oldest → newest
-     * @return array{summary: string, active_intent: string}
+     * @return array{summary: string, active_intent: string, changed: bool}
+     *         `changed` is false whenever the PRIOR summary is handed back
+     *         unmodified (empty batch or any provider/parse failure) — callers
+     *         MUST check it before treating the aging turns as absorbed, or a
+     *         transient failure silently drops that slice of the conversation.
      */
     public function summarize(
         LlmProviderInterface $provider,
@@ -55,7 +59,7 @@ PROMPT;
         string $priorIntent,
         array $agingTurns,
     ): array {
-        $prior = ['summary' => $priorSummary, 'active_intent' => $priorIntent];
+        $prior = ['summary' => $priorSummary, 'active_intent' => $priorIntent, 'changed' => false];
 
         if ($agingTurns === []) {
             return $prior;
@@ -100,6 +104,7 @@ PROMPT;
         return [
             'summary' => $summary !== '' ? $summary : $priorSummary,
             'active_intent' => $intent,
+            'changed' => true,
         ];
     }
 

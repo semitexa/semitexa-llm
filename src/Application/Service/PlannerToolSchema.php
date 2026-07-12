@@ -78,25 +78,30 @@ final class PlannerToolSchema
         $arguments = $toolCall['arguments'];
         $message = isset($arguments['message']) ? (string) $arguments['message'] : null;
 
+        // $message stays null (not '') when the model omits the "required" arg —
+        // required is a schema hint, not an enforced constraint, and models do
+        // occasionally omit it. A real null lets SkillLoopRunner::observe()'s
+        // `$response->message ?? $response->reason` fallback actually fire; an
+        // empty string would short-circuit it and show the user a blank reply.
         if ($name === self::FINAL_ANSWER) {
             return new PlannerResponse(
                 type: PlannerResponseType::Answer,
                 reason: 'Tool call: final_answer',
-                message: $message ?? '',
+                message: $message,
             );
         }
         if ($name === self::ASK_USER) {
             return new PlannerResponse(
                 type: PlannerResponseType::Ask,
                 reason: 'Tool call: ask_user',
-                message: $message ?? '',
+                message: $message,
             );
         }
         if ($name === self::REFUSE) {
             return new PlannerResponse(
                 type: PlannerResponseType::Refuse,
                 reason: 'Tool call: refuse_request',
-                message: $message ?? '',
+                message: $message,
             );
         }
 
