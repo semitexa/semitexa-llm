@@ -137,6 +137,14 @@ final class GeminiProvider implements LlmProviderInterface
             $body['systemInstruction'] = ['parts' => [['text' => $request->systemPrompt]]];
         }
 
+        // Native function-calling: expose the caller's tools so the model returns a
+        // structured `functionCall` (name + typed args) instead of JSON-in-text we
+        // would have to parse and salvage. Only set when tools are supplied, so the
+        // plain completion path is byte-identical to before.
+        if ($request->tools !== []) {
+            $body['tools'] = [['functionDeclarations' => $request->tools]];
+        }
+
         $generationConfig = [];
         if ($this->maxTokens !== null) {
             $generationConfig['maxOutputTokens'] = $this->maxTokens;
@@ -243,9 +251,23 @@ final class GeminiProvider implements LlmProviderInterface
         }
 
         $content = '';
+        $toolCall = null;
         foreach ($parts as $part) {
             if (isset($part['text']) && is_string($part['text'])) {
                 $content .= $part['text'];
+            }
+            // Gemini names the call `functionCall` and its arguments `args`; we
+            // normalise to the provider-agnostic {name, arguments} shape. First
+            // call wins — the planner acts on exactly one tool per turn.
+            if ($toolCall === null
+                && isset($part['functionCall']['name'])
+                && is_string($part['functionCall']['name'])
+            ) {
+                $args = $part['functionCall']['args'] ?? [];
+                $toolCall = [
+                    'name' => $part['functionCall']['name'],
+                    'arguments' => is_array($args) ? $args : [],
+                ];
             }
         }
 
@@ -259,6 +281,7 @@ final class GeminiProvider implements LlmProviderInterface
             success: true,
             tokensUsed: $tokensUsed,
             latencyMs: $latencyMs,
+            toolCall: $toolCall,
         );
     }
 }

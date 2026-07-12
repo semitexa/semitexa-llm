@@ -74,6 +74,41 @@ PROMPT;
     }
 
     /**
+     * The system prompt for the native function-calling path (Gemini). Unlike
+     * {@see buildSystemPrompt()}, it carries NO skills list and NO JSON-format
+     * block: the skills are supplied as tool declarations, and the model replies
+     * by calling exactly one tool (a skill, or `final_answer`/`ask_user`/
+     * `refuse_request`). Keeping the JSON instructions here would fight the tool
+     * schema and coax the model back into emitting text.
+     *
+     * @param \DateTimeZone|null $timezone the USER's wall-clock timezone for the
+     *        date anchor (see {@see buildSystemPrompt()} for why this matters).
+     */
+    public function buildToolSystemPrompt(?string $persona = null, ?\DateTimeZone $timezone = null): string
+    {
+        $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and act by calling the available tools.';
+
+        $now = new \DateTimeImmutable('now', $timezone);
+        $nowLine = 'Current date and time: ' . $now->format('l, j F Y, H:i')
+            . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
+            . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
+
+        return <<<PROMPT
+{$persona}
+
+Act by calling exactly one tool per turn:
+- Call a skill tool to perform an action; fill its arguments only from the tool's declared parameters.
+- Call `final_answer` to reply directly when no skill is needed, or to report the result after skills have run.
+- Call `ask_user` when the request is ambiguous or missing information a skill requires.
+- Call `refuse_request` only for a safety or policy reason.
+
+Never invent tools or arguments. Prefer acting over asking when the request is clear.
+
+{$nowLine}
+PROMPT;
+    }
+
+    /**
      * @param SkillManifest|null $manifest when given, an unrecognized `type` that
      *        actually names a manifest skill is salvaged into a skill proposal —
      *        smaller models routinely emit `{"type":"remember",...}` instead of
