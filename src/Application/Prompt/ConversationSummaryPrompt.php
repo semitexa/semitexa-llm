@@ -12,6 +12,7 @@ use Semitexa\Prompt\Attribute\AsPrompt;
 #[AsPrompt(
     id: self::ID,
     channel: 'llm',
+    template: 'llm.conversation-summary.twig',
     description: 'Rolling conversation-summary system prompt (JSON summary + active_intent).',
 )]
 final class ConversationSummaryPrompt
