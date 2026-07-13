@@ -6,8 +6,8 @@ namespace Semitexa\Llm\Tests\Unit\Planner;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Llm\Application\Service\Planner;
-use Semitexa\Llm\Application\Service\Prompt\PlannerJsonPrompt;
-use Semitexa\Llm\Application\Service\Prompt\PlannerToolPrompt;
+use Semitexa\Llm\Application\Prompt\PlannerJsonPrompt;
+use Semitexa\Llm\Application\Prompt\PlannerToolPrompt;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Prompt\Application\Service\PromptRegistry;
 

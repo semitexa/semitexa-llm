@@ -6,7 +6,7 @@ namespace Semitexa\Llm\Tests\Unit\Summarizer;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Llm\Application\Service\ConversationSummarizer;
-use Semitexa\Llm\Application\Service\Prompt\ConversationSummaryPrompt;
+use Semitexa\Llm\Application\Prompt\ConversationSummaryPrompt;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
@@ -39,7 +39,7 @@ Rules:
 - No markdown, no code fences, no extra text.
 PROMPT;
 
-        self::assertSame($original, (new ConversationSummaryPrompt())->system());
+        self::assertSame($original, rtrim((new PromptRegistry())->buildFromClasses([ConversationSummaryPrompt::class])['llm.conversation-summary']->system));
     }
 
     public function testSummarizeSendsTheCatalogSystemPromptToTheProvider(): void
@@ -52,7 +52,7 @@ PROMPT;
         ]);
 
         self::assertNotNull($provider->lastRequest);
-        self::assertSame((new ConversationSummaryPrompt())->system(), $provider->lastRequest->systemPrompt);
+        self::assertSame(rtrim((new PromptRegistry())->buildFromClasses([ConversationSummaryPrompt::class])['llm.conversation-summary']->system), $provider->lastRequest->systemPrompt);
         self::assertStringContainsString('NEW TURNS:', $provider->lastRequest->userMessage);
     }
 

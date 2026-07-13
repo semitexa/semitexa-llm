@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Application\Service;
 
-use Semitexa\Llm\Application\Service\Prompt\PlannerJsonPrompt;
-use Semitexa\Llm\Application\Service\Prompt\PlannerToolPrompt;
+use Semitexa\Llm\Application\Prompt\PlannerJsonPrompt;
+use Semitexa\Llm\Application\Prompt\PlannerToolPrompt;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;

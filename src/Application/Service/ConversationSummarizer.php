@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Application\Service;
 
-use Semitexa\Llm\Application\Service\Prompt\ConversationSummaryPrompt;
+use Semitexa\Llm\Application\Prompt\ConversationSummaryPrompt;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Prompt\Application\Service\PromptRenderer;
