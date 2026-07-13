@@ -128,7 +128,7 @@ final class ConversationSummarizer
     private function systemPrompt(): string
     {
         return ($this->renderer ??= new PromptRenderer())
-            ->render(ConversationSummaryPrompt::ID, [], $this->prompts)
+            ->render(new ConversationSummaryPrompt(), [], $this->prompts)
             ->system;
     }
 }

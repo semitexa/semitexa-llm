@@ -60,10 +60,10 @@ final class PlannerCatalogMigrationTest extends TestCase
 
         $jsonVars = $catalog['llm.planner.json']->variableNames();
         sort($jsonVars);
-        self::assertSame(['now_line', 'persona', 'skills'], $jsonVars);
+        self::assertSame(['nowLine', 'persona', 'skills'], $jsonVars);
 
         $toolVars = $catalog['llm.planner.tool']->variableNames();
         sort($toolVars);
-        self::assertSame(['now_line', 'persona'], $toolVars);
+        self::assertSame(['nowLine', 'persona'], $toolVars);
     }
 }

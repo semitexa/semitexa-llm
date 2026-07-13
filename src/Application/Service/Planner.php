@@ -10,15 +10,10 @@ use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
 use Semitexa\Llm\Domain\Model\SkillManifest;
-use Semitexa\Prompt\Application\Service\PromptRegistry;
 use Semitexa\Prompt\Application\Service\PromptRenderer;
-use Semitexa\Prompt\Domain\Model\PromptTemplate;
 
 final class Planner
 {
-    private ?PromptTemplate $jsonTemplate = null;
-    private ?PromptTemplate $toolTemplate = null;
-
     /**
      * The planner's two system prompts live in the prompt catalog as
      * {@see PlannerJsonPrompt} and {@see PlannerToolPrompt}. The renderer binds
@@ -41,13 +36,12 @@ final class Planner
     {
         $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.';
 
-        return $this->renderer()->renderTemplate(
-            $this->jsonTemplate ??= $this->template(PlannerJsonPrompt::class, PlannerJsonPrompt::ID),
-            [
-                'persona' => $persona,
-                'skills' => $manifest->toCompactPrompt(),
-                'now_line' => $this->nowLine($timezone),
-            ],
+        return $this->renderer()->render(
+            (new PlannerJsonPrompt())->withData(
+                $persona,
+                $this->nowLine($timezone),
+                $manifest->toCompactPrompt(),
+            ),
         )->system;
     }
 
@@ -66,12 +60,8 @@ final class Planner
     {
         $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and act by calling the available tools.';
 
-        return $this->renderer()->renderTemplate(
-            $this->toolTemplate ??= $this->template(PlannerToolPrompt::class, PlannerToolPrompt::ID),
-            [
-                'persona' => $persona,
-                'now_line' => $this->nowLine($timezone),
-            ],
+        return $this->renderer()->render(
+            (new PlannerToolPrompt())->withData($persona, $this->nowLine($timezone)),
         )->system;
     }
 
@@ -97,16 +87,6 @@ final class Planner
     private function renderer(): PromptRenderer
     {
         return $this->renderer ??= new PromptRenderer();
-    }
-
-    /**
-     * Resolve a catalog prompt straight from its owning class — no global
-     * discovery — so the planner's own prompts render deterministically in every
-     * context (booted app, CLI, unit test).
-     */
-    private function template(string $class, string $id): PromptTemplate
-    {
-        return (new PromptRegistry())->buildFromClasses([$class])[$id];
     }
 
     /**
