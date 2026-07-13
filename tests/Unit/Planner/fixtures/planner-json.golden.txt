@@ -2,7 +2,6 @@ __PERSONA__
 
 Available skills:
 
-
 Always respond with valid JSON in exactly one of these formats:
 
 Direct answer (no skill needed):
