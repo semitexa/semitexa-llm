@@ -12,7 +12,7 @@ use Semitexa\Prompt\Attribute\AsPrompt;
 #[AsPrompt(
     id: self::ID,
     channel: 'llm',
-    template: 'llm.planner.json.twig',
+    template: 'resources/prompts/llm.planner.json.twig',
     description: 'Planner system prompt, JSON-contract path (no native tool-calling).',
 )]
 final class PlannerJsonPrompt

@@ -12,7 +12,7 @@ use Semitexa\Prompt\Attribute\AsPrompt;
 #[AsPrompt(
     id: self::ID,
     channel: 'llm',
-    template: 'llm.planner.tool.twig',
+    template: 'resources/prompts/llm.planner.tool.twig',
     description: 'Planner system prompt, native tool-calling path (Gemini).',
 )]
 final class PlannerToolPrompt
