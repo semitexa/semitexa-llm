@@ -4,13 +4,30 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Application\Service;
 
+use Semitexa\Llm\Application\Service\Prompt\PlannerJsonPrompt;
+use Semitexa\Llm\Application\Service\Prompt\PlannerToolPrompt;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
 use Semitexa\Llm\Domain\Model\SkillManifest;
+use Semitexa\Prompt\Application\Service\PromptRegistry;
+use Semitexa\Prompt\Application\Service\PromptRenderer;
+use Semitexa\Prompt\Domain\Model\PromptTemplate;
 
 final class Planner
 {
+    private ?PromptTemplate $jsonTemplate = null;
+    private ?PromptTemplate $toolTemplate = null;
+
+    /**
+     * The planner's two system prompts live in the prompt catalog as
+     * {@see PlannerJsonPrompt} and {@see PlannerToolPrompt}. The renderer binds
+     * the dynamic parts (persona, skills, date anchor). $renderer is optional so
+     * every existing `new Planner()` call site keeps working; it defaults to a
+     * plain renderer, and the templates are resolved from their owning classes
+     * directly (no global discovery) so rendering is deterministic everywhere.
+     */
+    public function __construct(private ?PromptRenderer $renderer = null) {}
     /**
      * @param string|null $persona identity/role framing supplied by the caller
      *        (e.g. Semitexa OS injects who the assistant is and who it serves).
@@ -22,55 +39,16 @@ final class Planner
      */
     public function buildSystemPrompt(SkillManifest $manifest, ?string $persona = null, ?\DateTimeZone $timezone = null): string
     {
-        $skillsPrompt = $manifest->toCompactPrompt();
         $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.';
 
-        // Give the model an absolute time anchor so it can resolve relative dates
-        // ("today", "tomorrow", "next Friday", "завтра") into concrete values
-        // instead of passing language-specific phrases downstream skills can't parse.
-        //
-        // This line is kept at the very END of the prompt on purpose: it changes
-        // every minute, and an LLM runtime (Ollama) caches the KV of the longest
-        // matching prompt PREFIX. Putting a volatile value up top would bust the
-        // whole (large, static) skills prefix cache every minute; at the tail only
-        // this short suffix re-computes, so consecutive turns reuse the prefill.
-        $now = new \DateTimeImmutable('now', $timezone);
-        $nowLine = 'Current date and time: ' . $now->format('l, j F Y, H:i')
-            . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
-            . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
-
-        return <<<PROMPT
-{$persona}
-
-{$skillsPrompt}
-
-Always respond with valid JSON in exactly one of these formats:
-
-Direct answer (no skill needed):
-{"type":"answer","message":"Your answer.","reason":"Why no skill is needed."}
-
-Clarification question:
-{"type":"ask","message":"Your question.","reason":"What information is missing."}
-
-Propose a skill:
-{"type":"propose_skill","skill":"skill-name","arguments":{},"reason":"Why this skill matches.","confidence":0.9}
-
-Propose a pipeline (an ordered chain of skills run in sequence — ONLY when the request genuinely needs several skills one after another):
-{"type":"propose_pipeline","steps":[{"skill":"skill-a","arguments":{}},{"skill":"skill-b","arguments":{}}],"reason":"Why this chain.","confidence":0.8}
-
-Refuse:
-{"type":"refuse","message":"Why you cannot help.","reason":"Safety or policy reason."}
-
-Rules:
-- Only propose skills from the list above. Never invent skill names or argument names.
-- Prefer a single propose_skill; use propose_pipeline only when one skill must follow another.
-- Arguments must only use names listed in the skill inputs.
-- If the request is ambiguous, ask for clarification.
-- If no skill matches, answer directly or refuse.
-- Output valid JSON only. No markdown, no code fences, no extra text.
-
-{$nowLine}
-PROMPT;
+        return $this->renderer()->renderTemplate(
+            $this->jsonTemplate ??= $this->template(PlannerJsonPrompt::class, PlannerJsonPrompt::ID),
+            [
+                'persona' => $persona,
+                'skills' => $manifest->toCompactPrompt(),
+                'now_line' => $this->nowLine($timezone),
+            ],
+        )->system;
     }
 
     /**
@@ -88,24 +66,47 @@ PROMPT;
     {
         $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and act by calling the available tools.';
 
+        return $this->renderer()->renderTemplate(
+            $this->toolTemplate ??= $this->template(PlannerToolPrompt::class, PlannerToolPrompt::ID),
+            [
+                'persona' => $persona,
+                'now_line' => $this->nowLine($timezone),
+            ],
+        )->system;
+    }
+
+    /**
+     * The absolute time anchor bound into both planner prompts as `{{ now_line }}`.
+     *
+     * Give the model an absolute time anchor so it can resolve relative dates
+     * ("today", "tomorrow", "next Friday", "завтра") into concrete values instead
+     * of passing language-specific phrases downstream skills can't parse. Both
+     * catalog prompts keep this at the very END on purpose (see their docblocks):
+     * it changes every minute, and an Ollama runtime caches the KV of the longest
+     * matching prompt PREFIX, so a volatile tail preserves the static prefix cache.
+     */
+    private function nowLine(?\DateTimeZone $timezone): string
+    {
         $now = new \DateTimeImmutable('now', $timezone);
-        $nowLine = 'Current date and time: ' . $now->format('l, j F Y, H:i')
+
+        return 'Current date and time: ' . $now->format('l, j F Y, H:i')
             . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
             . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
+    }
 
-        return <<<PROMPT
-{$persona}
+    private function renderer(): PromptRenderer
+    {
+        return $this->renderer ??= new PromptRenderer();
+    }
 
-Act by calling exactly one tool per turn:
-- Call a skill tool to perform an action; fill its arguments only from the tool's declared parameters.
-- Call `final_answer` to reply directly when no skill is needed, or to report the result after skills have run.
-- Call `ask_user` when the request is ambiguous or missing information a skill requires.
-- Call `refuse_request` only for a safety or policy reason.
-
-Never invent tools or arguments. Prefer acting over asking when the request is clear.
-
-{$nowLine}
-PROMPT;
+    /**
+     * Resolve a catalog prompt straight from its owning class — no global
+     * discovery — so the planner's own prompts render deterministically in every
+     * context (booted app, CLI, unit test).
+     */
+    private function template(string $class, string $id): PromptTemplate
+    {
+        return (new PromptRegistry())->buildFromClasses([$class])[$id];
     }
 
     /**
