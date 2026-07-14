@@ -91,7 +91,9 @@ final class PromptEvalCommand extends Command
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
             ));
 
-            return Command::SUCCESS;
+            // Mirror the human path's exit code — a failed eval must not report
+            // SUCCESS to a script/CI checking `--json` exit codes.
+            return $effective['ok'] ? Command::SUCCESS : Command::FAILURE;
         }
 
         $io->title(sprintf('prompt:eval %s (%s)', $id, $this->providers->provider()->name()));
@@ -109,9 +111,16 @@ final class PromptEvalCommand extends Command
      */
     private function evaluate(PromptTemplate $template, array $variables, string $message): array
     {
-        $rendered = (new PromptRenderer())->renderTemplate($template, $variables);
-        $request = $this->requests->fromRendered($rendered, $message);
-        $response = $this->providers->provider()->complete($request);
+        try {
+            $rendered = (new PromptRenderer())->renderTemplate($template, $variables);
+            $request = $this->requests->fromRendered($rendered, $message);
+            $response = $this->providers->provider()->complete($request);
+        } catch (\Throwable $e) {
+            // A provider failure (network/timeout/rate-limit) must surface as a
+            // clean ok=false result — not a stack trace — so the caller (incl.
+            // --json) still gets structured output and a FAILURE exit code.
+            return ['system' => '', 'ok' => false, 'content' => '', 'error' => $e->getMessage()];
+        }
 
         return [
             'system' => $rendered->system,
