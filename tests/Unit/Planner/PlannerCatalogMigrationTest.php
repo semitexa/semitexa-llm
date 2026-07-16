@@ -29,7 +29,9 @@ final class PlannerCatalogMigrationTest extends TestCase
 
     private function neutralize(string $prompt): string
     {
-        return (string) preg_replace('/^Current date and time:.*$/m', '__NOW__', $prompt);
+        // Matches both the legacy minute-granular anchor ("Current date and
+        // time: …") captured in the goldens and the current day-granular one.
+        return (string) preg_replace('/^Current date( and time)?:.*$/m', '__NOW__', $prompt);
     }
 
     private function golden(string $name): string

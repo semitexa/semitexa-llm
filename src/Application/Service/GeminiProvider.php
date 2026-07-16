@@ -25,6 +25,28 @@ use Semitexa\Llm\Domain\Model\LlmResponse;
  * (there is no `assistant`/`system` turn role), and the answer is a concatenation
  * of `candidates[0].content.parts[].text`. This class is the only place that
  * knowledge lives — the rest of the module speaks `LlmRequest`/`LlmResponse`.
+ *
+ * CONTEXT CACHING. Two layers, both surfaced via `LlmResponse::$cachedTokens`:
+ *
+ * - Implicit (Google-side, free, on by default for Gemini 2.5+): requests whose
+ *   token PREFIX matches a recent request get the cached part discounted. The
+ *   provider can't opt in or out — what makes hits happen is callers keeping
+ *   the prefix stable: static persona/rules first, volatile lines (dates, user
+ *   profile) at the very end, history append-only. Minimum prompt size applies
+ *   (2048 tokens on gemini-2.5-flash), so small prompts never hit it.
+ *
+ * - Explicit (`GEMINI_CONTEXT_CACHE=true`, off by default): the static prefix
+ *   (systemInstruction + tools) is uploaded once as a `cachedContents` object
+ *   with a TTL and referenced by name on every call, so its tokens are billed
+ *   at the cached rate regardless of request timing. The cache object is
+ *   immutable — per-conversation caching of growing history is deliberately
+ *   NOT attempted (it would recreate the cache every turn and cost more in
+ *   storage than it saves). Only prefixes at least
+ *   GEMINI_CONTEXT_CACHE_MIN_CHARS long are cached: Gemini rejects caches
+ *   below the model minimum (2048 tokens on 2.5 Flash), and tiny prefixes
+ *   aren't worth a storage-billed object. Cache names are remembered per
+ *   worker; expiry, deletion upstream, or refusal to cache all degrade
+ *   gracefully to the uncached path.
  */
 #[SatisfiesServiceContract(of: LlmProviderInterface::class, factoryKey: LlmBackend::Gemini)]
 final class GeminiProvider implements LlmProviderInterface
@@ -44,6 +66,21 @@ final class GeminiProvider implements LlmProviderInterface
     #[Config(env: 'GEMINI_RETRIES', default: 2)]
     protected int $maxRetries;
 
+    #[Config(env: 'GEMINI_CONTEXT_CACHE', default: false)]
+    protected bool $contextCache;
+
+    #[Config(env: 'GEMINI_CONTEXT_CACHE_TTL', default: 3600)]
+    protected int $contextCacheTtl;
+
+    /**
+     * Prefixes shorter than this many characters are never cached explicitly.
+     * Cyrillic runs ~2 chars/token, English ~4, so the 6000 default clears the
+     * 2048-token model minimum for the mixed prompts Solomiia-style assistants
+     * send, without attempting doomed cache creates for small prompts.
+     */
+    #[Config(env: 'GEMINI_CONTEXT_CACHE_MIN_CHARS', default: 6000)]
+    protected int $contextCacheMinChars;
+
     /**
      * Clone-only tuning (never injected). null $maxTokens = no `maxOutputTokens`
      * cap; $thinking = false sends `thinkingConfig.thinkingBudget = 0` so a
@@ -52,6 +89,30 @@ final class GeminiProvider implements LlmProviderInterface
      */
     protected ?int $maxTokens = null;
     protected bool $thinking = true;
+
+    /**
+     * Worker-local registry of live explicit caches: prefix fingerprint →
+     * `cachedContents/...` name + unix expiry. Static so every clone (and every
+     * request the worker serves) reuses one upload; each Swoole worker keeps its
+     * own copy, which at worst duplicates a cheap cache object per worker.
+     *
+     * @var array<string, array{name: string, expiresAt: int}>
+     */
+    private static array $cachedPrefixes = [];
+
+    /**
+     * Prefix fingerprints Gemini refused to cache (e.g. below the model's token
+     * minimum) → unix time until which we won't retry creating them. Prevents a
+     * failed create from being re-attempted on every single completion.
+     *
+     * @var array<string, int>
+     */
+    private static array $cacheRefusals = [];
+
+    private const CACHE_REFUSAL_BACKOFF_S = 600;
+
+    /** Reuse a cache only while it has at least this long left to live. */
+    private const CACHE_EXPIRY_MARGIN_S = 30;
 
     public function name(): string
     {
@@ -122,45 +183,19 @@ final class GeminiProvider implements LlmProviderInterface
             );
         }
 
-        $contents = [];
-
-        foreach ($request->history as $entry) {
-            $role = ($entry['role'] === 'assistant' || $entry['role'] === 'model') ? 'model' : 'user';
-            $contents[] = ['role' => $role, 'parts' => [['text' => $entry['content']]]];
+        // Explicit context caching: reference the (already or freshly) uploaded
+        // static prefix instead of resending it. Any failure along the way simply
+        // leaves $cachedContent null and the request goes out self-contained.
+        $fingerprint = null;
+        $cachedContent = null;
+        if ($this->contextCache && $request->systemPrompt !== '' && $this->prefixSize($request) >= $this->contextCacheMinChars) {
+            $fingerprint = $this->prefixFingerprint($request);
+            $cachedContent = $this->ensureCachedPrefix($fingerprint, $request);
         }
 
-        $contents[] = ['role' => 'user', 'parts' => [['text' => $request->userMessage]]];
+        $payload = $this->encodeRequestBody($request, $cachedContent);
 
-        $body = ['contents' => $contents];
-
-        if ($request->systemPrompt !== '') {
-            $body['systemInstruction'] = ['parts' => [['text' => $request->systemPrompt]]];
-        }
-
-        // Native function-calling: expose the caller's tools so the model returns a
-        // structured `functionCall` (name + typed args) instead of JSON-in-text we
-        // would have to parse and salvage. Only set when tools are supplied, so the
-        // plain completion path is byte-identical to before.
-        if ($request->tools !== []) {
-            $body['tools'] = [['functionDeclarations' => $request->tools]];
-        }
-
-        $generationConfig = [];
-        if ($this->maxTokens !== null) {
-            $generationConfig['maxOutputTokens'] = $this->maxTokens;
-        }
-        if (!$this->thinking) {
-            // Only sent when explicitly disabled — a thinking-capable model would
-            // otherwise spend part of its output budget on the reasoning trace.
-            $generationConfig['thinkingConfig'] = ['thinkingBudget' => 0];
-        }
-        if ($generationConfig !== []) {
-            $body['generationConfig'] = $generationConfig;
-        }
-
-        $payload = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-
-        if ($payload === false) {
+        if ($payload === null) {
             return new LlmResponse(
                 content: '',
                 success: false,
@@ -195,6 +230,21 @@ final class GeminiProvider implements LlmProviderInterface
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $curlError = curl_error($ch);
             curl_close($ch);
+
+            // A non-transient 4xx while referencing a cache usually means the
+            // cachedContents object expired or was deleted upstream — drop it
+            // and replay the same request self-contained (one extra attempt at
+            // most, since $cachedContent is now null). The next completion will
+            // recreate the cache.
+            if ($cachedContent !== null && $response !== false && $httpCode >= 400 && $httpCode < 500 && $httpCode !== 429) {
+                unset(self::$cachedPrefixes[$fingerprint]);
+                $cachedContent = null;
+                $retryPayload = $this->encodeRequestBody($request, null);
+                if ($retryPayload !== null) {
+                    $payload = $retryPayload;
+                    continue;
+                }
+            }
 
             // 429 (rate limit) and 5xx are transient; 4xx auth/quota errors are not.
             $isTransientFailure = $response === false || $httpCode >= 500 || $httpCode === 429;
@@ -271,10 +321,13 @@ final class GeminiProvider implements LlmProviderInterface
             }
         }
 
-        $tokensUsed = null;
-        if (isset($decoded['usageMetadata']['candidatesTokenCount'])) {
-            $tokensUsed = (int) $decoded['usageMetadata']['candidatesTokenCount'];
-        }
+        // Full usage picture: output tokens (tokensUsed, as before), input tokens,
+        // and how many input tokens the context cache served — the field to watch
+        // when verifying that prompts are actually cache-friendly.
+        $usage = is_array($decoded['usageMetadata'] ?? null) ? $decoded['usageMetadata'] : [];
+        $tokensUsed = isset($usage['candidatesTokenCount']) ? (int) $usage['candidatesTokenCount'] : null;
+        $promptTokens = isset($usage['promptTokenCount']) ? (int) $usage['promptTokenCount'] : null;
+        $cachedTokens = isset($usage['cachedContentTokenCount']) ? (int) $usage['cachedContentTokenCount'] : null;
 
         return new LlmResponse(
             content: $content,
@@ -282,6 +335,143 @@ final class GeminiProvider implements LlmProviderInterface
             tokensUsed: $tokensUsed,
             latencyMs: $latencyMs,
             toolCall: $toolCall,
+            promptTokens: $promptTokens,
+            cachedTokens: $cachedTokens,
         );
+    }
+
+    /**
+     * The request body as JSON, or null when encoding fails. With a cache name,
+     * `cachedContent` replaces `systemInstruction` + `tools` — Gemini rejects a
+     * request that carries both the cache reference and the fields it contains.
+     */
+    private function encodeRequestBody(LlmRequest $request, ?string $cachedContent): ?string
+    {
+        $contents = [];
+
+        foreach ($request->history as $entry) {
+            $role = ($entry['role'] === 'assistant' || $entry['role'] === 'model') ? 'model' : 'user';
+            $contents[] = ['role' => $role, 'parts' => [['text' => $entry['content']]]];
+        }
+
+        $contents[] = ['role' => 'user', 'parts' => [['text' => $request->userMessage]]];
+
+        $body = ['contents' => $contents];
+
+        if ($cachedContent !== null) {
+            $body['cachedContent'] = $cachedContent;
+        } else {
+            if ($request->systemPrompt !== '') {
+                $body['systemInstruction'] = ['parts' => [['text' => $request->systemPrompt]]];
+            }
+
+            // Native function-calling: expose the caller's tools so the model returns a
+            // structured `functionCall` (name + typed args) instead of JSON-in-text we
+            // would have to parse and salvage. Only set when tools are supplied, so the
+            // plain completion path is byte-identical to before.
+            if ($request->tools !== []) {
+                $body['tools'] = [['functionDeclarations' => $request->tools]];
+            }
+        }
+
+        $generationConfig = [];
+        if ($this->maxTokens !== null) {
+            $generationConfig['maxOutputTokens'] = $this->maxTokens;
+        }
+        if (!$this->thinking) {
+            // Only sent when explicitly disabled — a thinking-capable model would
+            // otherwise spend part of its output budget on the reasoning trace.
+            $generationConfig['thinkingConfig'] = ['thinkingBudget' => 0];
+        }
+        if ($generationConfig !== []) {
+            $body['generationConfig'] = $generationConfig;
+        }
+
+        $payload = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        return $payload === false ? null : $payload;
+    }
+
+    /** Rough size of the cacheable prefix (system prompt + tool declarations). */
+    private function prefixSize(LlmRequest $request): int
+    {
+        $toolsJson = $request->tools !== [] ? (string) json_encode($request->tools, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) : '';
+
+        return strlen($request->systemPrompt) + strlen($toolsJson);
+    }
+
+    /** Identity of the cacheable prefix: same model + system + tools ⇒ same cache. */
+    private function prefixFingerprint(LlmRequest $request): string
+    {
+        $toolsJson = $request->tools !== [] ? (string) json_encode($request->tools, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) : '';
+
+        return sha1($this->model . '|' . $this->contextCacheTtl . '|' . $request->systemPrompt . '|' . $toolsJson);
+    }
+
+    /**
+     * The live `cachedContents/...` name for this prefix — reused while valid,
+     * created via the API when absent, null when Gemini can't or won't cache it
+     * (below the model's token minimum, quota, transient failure). A refusal is
+     * remembered for a while so we don't pay a failed create per completion.
+     */
+    private function ensureCachedPrefix(string $fingerprint, LlmRequest $request): ?string
+    {
+        $now = time();
+
+        $entry = self::$cachedPrefixes[$fingerprint] ?? null;
+        if ($entry !== null && $entry['expiresAt'] - self::CACHE_EXPIRY_MARGIN_S > $now) {
+            return $entry['name'];
+        }
+        unset(self::$cachedPrefixes[$fingerprint]);
+
+        if ((self::$cacheRefusals[$fingerprint] ?? 0) > $now) {
+            return null;
+        }
+
+        $body = [
+            'model' => 'models/' . $this->model,
+            'systemInstruction' => ['parts' => [['text' => $request->systemPrompt]]],
+            'ttl' => $this->contextCacheTtl . 's',
+        ];
+        if ($request->tools !== []) {
+            $body['tools'] = [['functionDeclarations' => $request->tools]];
+        }
+
+        $payload = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($payload === false) {
+            self::$cacheRefusals[$fingerprint] = $now + self::CACHE_REFUSAL_BACKOFF_S;
+
+            return null;
+        }
+
+        $ch = curl_init($this->baseUrl . '/cachedContents');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'x-goog-api-key: ' . $this->apiKey,
+            ],
+            CURLOPT_TIMEOUT => min($this->timeout, 20),
+            CURLOPT_CONNECTTIMEOUT => 10,
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $decoded = is_string($response) ? json_decode($response, true) : null;
+        $name = is_array($decoded) && isset($decoded['name']) && is_string($decoded['name']) ? $decoded['name'] : null;
+
+        if ($httpCode !== 200 || $name === null) {
+            self::$cacheRefusals[$fingerprint] = $now + self::CACHE_REFUSAL_BACKOFF_S;
+
+            return null;
+        }
+
+        unset(self::$cacheRefusals[$fingerprint]);
+        self::$cachedPrefixes[$fingerprint] = ['name' => $name, 'expiresAt' => $now + $this->contextCacheTtl];
+
+        return $name;
     }
 }
