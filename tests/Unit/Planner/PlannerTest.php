@@ -200,13 +200,15 @@ final class PlannerTest extends TestCase
         $prompt = $this->planner->buildSystemPrompt($manifest, null, $zone);
         $after = new \DateTimeImmutable('now', $zone);
 
-        // The anchor must carry the zone's wall-clock minute (tolerate a tick over
-        // a minute boundary between the two probes).
+        // The anchor must carry the zone's wall-clock DATE — it is deliberately
+        // day-granular so it doesn't bust prompt-prefix caches between turns
+        // (tolerate a tick over midnight between the two probes).
         $this->assertTrue(
-            str_contains($prompt, 'ISO ' . $before->format('Y-m-d H:i'))
-            || str_contains($prompt, 'ISO ' . $after->format('Y-m-d H:i')),
+            str_contains($prompt, 'ISO ' . $before->format('Y-m-d'))
+            || str_contains($prompt, 'ISO ' . $after->format('Y-m-d')),
             'Prompt date anchor is not in the requested timezone.',
         );
+        $this->assertStringNotContainsString('ISO ' . $before->format('Y-m-d H:'), $prompt);
     }
 
     public function test_skill_name_as_type_is_salvaged_into_proposal_with_manifest(): void

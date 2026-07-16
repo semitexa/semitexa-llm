@@ -66,21 +66,24 @@ final class Planner
     }
 
     /**
-     * The absolute time anchor bound into both planner prompts as `{{ now_line }}`.
+     * The absolute date anchor bound into both planner prompts as `{{ now_line }}`.
      *
-     * Give the model an absolute time anchor so it can resolve relative dates
+     * Give the model an absolute date anchor so it can resolve relative dates
      * ("today", "tomorrow", "next Friday", "завтра") into concrete values instead
      * of passing language-specific phrases downstream skills can't parse. Both
-     * catalog prompts keep this at the very END on purpose (see their docblocks):
-     * it changes every minute, and an Ollama runtime caches the KV of the longest
-     * matching prompt PREFIX, so a volatile tail preserves the static prefix cache.
+     * catalog prompts keep this at the very END on purpose (see their docblocks),
+     * and it is deliberately DAY-granular: prompt caches key on the exact token
+     * prefix (Ollama's KV prefill cache, Gemini's implicit context cache), so a
+     * minute-level timestamp would invalidate them between almost every pair of
+     * turns. Callers that genuinely need the time of day should append their own
+     * line after this one — at the tail, where it only busts its own tokens.
      */
     private function nowLine(?\DateTimeZone $timezone): string
     {
         $now = new \DateTimeImmutable('now', $timezone);
 
-        return 'Current date and time: ' . $now->format('l, j F Y, H:i')
-            . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d H:i') . ').'
+        return 'Current date: ' . $now->format('l, j F Y')
+            . ' (' . $now->format('T') . ', ISO ' . $now->format('Y-m-d') . ').'
             . ' Resolve any relative date the user gives ("today", "tomorrow", "next Friday", "завтра", etc.) against this into an absolute date before using it.';
     }
 
