@@ -66,6 +66,28 @@ final class GeminiProviderTest extends TestCase
         $this->assertFalse($this->getProtected($tuned, 'thinking'));
     }
 
+    public function test_with_model_clones_to_a_different_model(): void
+    {
+        $provider = new GeminiProvider();
+        $this->setProtected($provider, 'model', 'gemini-2.5-flash');
+
+        $lite = $provider->withModel('gemini-2.5-flash-lite');
+        $this->assertNotSame($provider, $lite);
+        $this->assertSame('gemini-2.5-flash-lite', $this->getProtected($lite, 'model'));
+        $this->assertSame('gemini-2.5-flash', $this->getProtected($provider, 'model'));
+    }
+
+    public function test_with_model_is_a_no_op_for_blank_or_same_model(): void
+    {
+        $provider = new GeminiProvider();
+        $this->setProtected($provider, 'model', 'gemini-2.5-flash');
+
+        // A blank config or the current model must not spawn a needless clone.
+        $this->assertSame($provider, $provider->withModel(''));
+        $this->assertSame($provider, $provider->withModel('  '));
+        $this->assertSame($provider, $provider->withModel('gemini-2.5-flash'));
+    }
+
     public function test_llm_response_usage_fields_default_to_null(): void
     {
         $response = new \Semitexa\Llm\Domain\Model\LlmResponse(content: 'x', success: true);

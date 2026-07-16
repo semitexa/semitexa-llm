@@ -146,6 +146,26 @@ final class GeminiProvider implements LlmProviderInterface
         return $c;
     }
 
+    /**
+     * A clone that talks to a DIFFERENT Gemini model — the seam for two-tier
+     * routing (RFC-002 §4.1): a cheap/fast model (e.g. gemini-2.5-flash-lite)
+     * for silent classification/tool-picking, the strong model for the reply.
+     * Everything else (key, base URL, caching) is inherited; the context cache
+     * keys on the model, so each tier gets its own cache. A blank model is a
+     * no-op, so callers can pass an unset config safely.
+     */
+    public function withModel(string $model): self
+    {
+        $model = trim($model);
+        if ($model === '' || $model === $this->model) {
+            return $this;
+        }
+        $c = clone $this;
+        $c->model = $model;
+
+        return $c;
+    }
+
     public function healthCheck(): bool
     {
         if ($this->apiKey === '') {
