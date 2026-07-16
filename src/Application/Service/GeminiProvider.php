@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Application\Service;
 
+use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Core\Attribute\Config;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
@@ -91,10 +93,21 @@ final class GeminiProvider implements LlmProviderInterface
     protected bool $thinking = true;
 
     /**
-     * Worker-local registry of live explicit caches: prefix fingerprint →
-     * `cachedContents/...` name + unix expiry. Static so every clone (and every
-     * request the worker serves) reuses one upload; each Swoole worker keeps its
-     * own copy, which at worst duplicates a cheap cache object per worker.
+     * Shared registry of live explicit caches (L2), so every Swoole worker AND
+     * every restart reuses ONE `cachedContents` object per prefix instead of
+     * minting its own — the worker-local static below is only an L1 in front of
+     * it. Without this, a multi-worker server piles up dozens of duplicate caches
+     * (paying creation + storage) that each serve a handful of requests, so the
+     * discount never outruns the overhead. Optional: unset off-container (tests),
+     * where it degrades to L1-only.
+     */
+    #[InjectAsReadonly]
+    protected CacheManagerInterface $cache;
+
+    /**
+     * Worker-local L1 registry: prefix fingerprint → `cachedContents/...` name +
+     * unix expiry. Static so every clone and request the worker serves skips the
+     * L2 round-trip once warm.
      *
      * @var array<string, array{name: string, expiresAt: int}>
      */
@@ -258,6 +271,7 @@ final class GeminiProvider implements LlmProviderInterface
             // recreate the cache.
             if ($cachedContent !== null && $response !== false && $httpCode >= 400 && $httpCode < 500 && $httpCode !== 429) {
                 unset(self::$cachedPrefixes[$fingerprint]);
+                $this->sharedCacheForget($fingerprint);
                 $cachedContent = null;
                 $retryPayload = $this->encodeRequestBody($request, null);
                 if ($retryPayload !== null) {
@@ -438,11 +452,20 @@ final class GeminiProvider implements LlmProviderInterface
     {
         $now = time();
 
+        // L1 (worker-local): fastest, skips the shared round-trip once warm.
         $entry = self::$cachedPrefixes[$fingerprint] ?? null;
         if ($entry !== null && $entry['expiresAt'] - self::CACHE_EXPIRY_MARGIN_S > $now) {
             return $entry['name'];
         }
         unset(self::$cachedPrefixes[$fingerprint]);
+
+        // L2 (shared): another worker or a previous boot already created it.
+        $shared = $this->sharedCacheGet($fingerprint);
+        if ($shared !== null && $shared['expiresAt'] - self::CACHE_EXPIRY_MARGIN_S > $now) {
+            self::$cachedPrefixes[$fingerprint] = $shared;
+
+            return $shared['name'];
+        }
 
         if ((self::$cacheRefusals[$fingerprint] ?? 0) > $now) {
             return null;
@@ -490,8 +513,43 @@ final class GeminiProvider implements LlmProviderInterface
         }
 
         unset(self::$cacheRefusals[$fingerprint]);
-        self::$cachedPrefixes[$fingerprint] = ['name' => $name, 'expiresAt' => $now + $this->contextCacheTtl];
+        $stored = ['name' => $name, 'expiresAt' => $now + $this->contextCacheTtl];
+        self::$cachedPrefixes[$fingerprint] = $stored;
+        $this->sharedCachePut($fingerprint, $stored);
 
         return $name;
+    }
+
+    private function sharedCacheKey(string $fingerprint): string
+    {
+        return 'gemini:ctxcache:' . $fingerprint;
+    }
+
+    /** @return array{name: string, expiresAt: int}|null */
+    private function sharedCacheGet(string $fingerprint): ?array
+    {
+        if (!isset($this->cache)) {
+            return null;
+        }
+        $v = $this->cache->get($this->sharedCacheKey($fingerprint));
+
+        return is_array($v) && isset($v['name'], $v['expiresAt']) && is_string($v['name'])
+            ? ['name' => $v['name'], 'expiresAt' => (int) $v['expiresAt']]
+            : null;
+    }
+
+    /** @param array{name: string, expiresAt: int} $entry */
+    private function sharedCachePut(string $fingerprint, array $entry): void
+    {
+        if (isset($this->cache)) {
+            $this->cache->put($this->sharedCacheKey($fingerprint), $entry, $this->contextCacheTtl);
+        }
+    }
+
+    private function sharedCacheForget(string $fingerprint): void
+    {
+        if (isset($this->cache)) {
+            $this->cache->forget($this->sharedCacheKey($fingerprint));
+        }
     }
 }
