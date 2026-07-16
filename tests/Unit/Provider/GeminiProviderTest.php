@@ -179,11 +179,33 @@ final class GeminiProviderTest extends TestCase
         $this->assertSame([], $this->getStatic('cachedPrefixes'));
     }
 
+    public function test_shared_cache_lets_another_worker_reuse_a_prefix(): void
+    {
+        // Two providers = two "workers": each has its own L1 static, but they
+        // share one CacheManager (Redis in production). Worker A's cache must be
+        // reusable by worker B without a second create.
+        $shared = new FakeCacheManager();
+        $workerA = $this->configuredProvider($shared);
+        $workerB = $this->configuredProvider($shared);
+        $request = new LlmRequest(systemPrompt: 'Persona', userMessage: 'x');
+        $fingerprint = (string) $this->invokePrivate($workerA, 'prefixFingerprint', [$request]);
+
+        // Worker A recorded a live cache (its L1 + the shared store).
+        $this->invokePrivate($workerA, 'sharedCachePut', [$fingerprint, ['name' => 'cachedContents/shared', 'expiresAt' => time() + 3600]]);
+
+        // Worker B's L1 is empty, but it finds the entry in the shared store.
+        $this->assertSame(
+            'cachedContents/shared',
+            $this->invokePrivate($workerB, 'ensureCachedPrefix', [$fingerprint, $request]),
+        );
+    }
+
     /**
      * A provider with the #[Config] scalars a container would inject. The base
      * URL is empty so any accidental HTTP attempt in a unit test fails loudly.
+     * An optional shared cache stands in for the Redis-backed L2.
      */
-    private function configuredProvider(): GeminiProvider
+    private function configuredProvider(?FakeCacheManager $cache = null): GeminiProvider
     {
         $provider = new GeminiProvider();
         $this->setProtected($provider, 'apiKey', 'k');
@@ -191,6 +213,9 @@ final class GeminiProviderTest extends TestCase
         $this->setProtected($provider, 'model', 'gemini-2.5-flash');
         $this->setProtected($provider, 'contextCacheTtl', 3600);
         $this->setProtected($provider, 'contextCacheMinChars', 6000);
+        if ($cache !== null) {
+            $this->setProtected($provider, 'cache', $cache);
+        }
 
         return $provider;
     }
@@ -226,5 +251,57 @@ final class GeminiProviderTest extends TestCase
         $ref = new \ReflectionProperty(GeminiProvider::class, $property);
 
         return $ref->getValue();
+    }
+}
+
+/** Minimal in-memory CacheManager for the shared-cache (L2) test. */
+final class FakeCacheManager implements \Semitexa\Cache\Domain\Contract\CacheManagerInterface
+{
+    /** @var array<string, mixed> */
+    private array $store = [];
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return $this->store[$key] ?? $default;
+    }
+
+    public function put(string $key, mixed $value, ?int $ttlSeconds = null, array $tags = []): void
+    {
+        $this->store[$key] = $value;
+    }
+
+    public function remember(string $key, callable $resolver, ?int $ttlSeconds = null, array $tags = []): mixed
+    {
+        return $this->store[$key] ??= $resolver();
+    }
+
+    public function forget(string $key): void
+    {
+        unset($this->store[$key]);
+    }
+
+    public function flushTags(string ...$tags): int
+    {
+        return 0;
+    }
+
+    public function flushNamespace(?string $namespace = null): int
+    {
+        return 0;
+    }
+
+    public function withNamespace(string $namespace): \Semitexa\Cache\Domain\Contract\CacheManagerInterface
+    {
+        return $this;
+    }
+
+    public function withTags(string ...$tags): \Semitexa\Cache\Domain\Contract\CacheManagerInterface
+    {
+        return $this;
+    }
+
+    public function scope(\Semitexa\Cache\Domain\Enum\CacheScope $scope): \Semitexa\Cache\Domain\Contract\CacheManagerInterface
+    {
+        return $this;
     }
 }
