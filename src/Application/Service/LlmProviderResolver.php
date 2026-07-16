@@ -45,6 +45,24 @@ final class LlmProviderResolver
         };
     }
 
+    /**
+     * Two-tier routing (RFC-002 §4.1): the provider for SILENT classification /
+     * tool-picking (the decider phase), routed to the cheaper/faster model named
+     * in `LLM_DECIDER_MODEL` when set — the strong {@see provider()} still writes
+     * the reply. Falls back to the normal provider when the env is unset or the
+     * active provider can't switch models, so it is safe to call unconditionally.
+     */
+    public function deciderProvider(): LlmProviderInterface
+    {
+        $provider = $this->provider();
+        $model = Environment::getEnvValue('LLM_DECIDER_MODEL');
+        if ($model !== null && trim($model) !== '' && method_exists($provider, 'withModel')) {
+            return $provider->withModel($model);
+        }
+
+        return $provider;
+    }
+
     public function backend(): LlmBackend
     {
         return LlmBackend::tryFrom(Environment::getEnvValue('LLM_BACKEND') ?? LlmBackend::Local->value)
