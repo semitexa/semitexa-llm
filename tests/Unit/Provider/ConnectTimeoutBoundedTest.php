@@ -31,8 +31,12 @@ final class ConnectTimeoutBoundedTest extends TestCase
     /** The bounded literal healthCheck() is allowed to keep — it is the cheap probe. */
     private const PROBE_CONNECT_TIMEOUT = 3;
 
-    /** No configured default may exceed this; past it the boot path is at risk again. */
-    private const MAX_CONFIGURED_DEFAULT = 10;
+    /**
+     * The documented default. A provider may go lower — that is only stricter — but not higher:
+     * the previous ceiling of 10 was exactly the hardcoded value this test exists to forbid, so
+     * a new provider could reintroduce it and still pass.
+     */
+    private const MAX_CONFIGURED_DEFAULT = 5;
 
     /** @return array<string, array{0: string}> */
     public static function providerFiles(): array
@@ -57,20 +61,32 @@ final class ConnectTimeoutBoundedTest extends TestCase
         $source = file_get_contents($file);
         self::assertIsString($source);
 
-        preg_match_all('/CURLOPT_CONNECTTIMEOUT\s*=>\s*([^,\n]+)/', $source, $matches);
+        preg_match_all(
+            '/CURLOPT_CONNECTTIMEOUT\s*=>\s*([^,\n]+)/',
+            $source,
+            $matches,
+            PREG_OFFSET_CAPTURE,
+        );
         self::assertNotEmpty($matches[1], basename($file) . ' sets no connect timeout at all');
 
-        foreach ($matches[1] as $value) {
-            $value = trim($value);
-            if ($value === (string) self::PROBE_CONNECT_TIMEOUT) {
-                continue; // the bounded healthCheck probe
+        // By POSITION, not by text. The probe's own line is `CURLOPT_CONNECTTIMEOUT => 3`, so a
+        // str_contains() check against the probe's body would happily bless an identical literal
+        // written inside complete() — which is exactly the hole this guard is meant to close.
+        [$probeStart, $probeEnd] = self::methodBounds($source, 'healthCheck');
+
+        foreach ($matches[1] as [$raw, $offset]) {
+            $value = trim($raw);
+            $insideProbe = $probeStart !== null && $offset > $probeStart && $offset < $probeEnd;
+
+            if ($value === (string) self::PROBE_CONNECT_TIMEOUT && $insideProbe) {
+                continue; // the bounded healthCheck probe, and only there
             }
 
             self::assertSame(
                 '$this->connectTimeout',
                 $value,
-                basename($file) . " hardcodes a connect timeout of {$value}; an unreachable host"
-                    . ' would cost that on every attempt, on the boot path included',
+                basename($file) . " hardcodes a connect timeout of {$value} outside healthCheck();"
+                    . ' an unreachable host would cost that on every attempt, boot path included',
             );
         }
     }
@@ -104,6 +120,38 @@ final class ConnectTimeoutBoundedTest extends TestCase
             $connect,
             basename($file) . ' must not spend its whole generation budget waiting for a handshake',
         );
+    }
+
+    /**
+     * Where one method starts and ends in the file, so a literal can be judged by WHERE it sits.
+     *
+     * Brace-matched: the question is which region of this very string an offset falls in, and
+     * reflection would answer in line numbers that then have to be mapped back to offsets.
+     *
+     * @return array{0: int|null, 1: int}
+     */
+    private static function methodBounds(string $source, string $method): array
+    {
+        $start = strpos($source, 'public function ' . $method . '(');
+        if ($start === false) {
+            return [null, 0];
+        }
+
+        $depth = 0;
+        $seenBrace = false;
+        for ($i = $start, $len = strlen($source); $i < $len; $i++) {
+            if ($source[$i] === '{') {
+                $depth++;
+                $seenBrace = true;
+            } elseif ($source[$i] === '}') {
+                $depth--;
+                if ($seenBrace && $depth === 0) {
+                    return [$start, $i];
+                }
+            }
+        }
+
+        return [$start, $len];
     }
 
     private static function configDefault(ReflectionProperty $property): mixed
