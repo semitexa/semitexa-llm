@@ -26,6 +26,19 @@ final class LocalOllamaProvider implements LlmProviderInterface
     #[Config(env: 'LLM_RETRIES', default: 1)]
     protected int $maxRetries;
 
+    /**
+     * The connect phase only — how long to wait for the TCP handshake, separate from
+     * {@see $timeout}, which budgets generation and has to stay generous for a slow
+     * local model. Splitting them matters because the two failures are nothing alike:
+     * a model thinking for 60s is working, while a host that has gone away never
+     * completes the handshake at all and costs the full connect timeout on EVERY
+     * attempt, retries included. That bill is paid on the worker boot path too, via
+     * the OS planner warm-up, so a stale LLM_BASE_URL used to be enough to keep a
+     * Swoole worker dying and respawning indefinitely.
+     */
+    #[Config(env: 'LLM_CONNECT_TIMEOUT', default: 5)]
+    protected int $connectTimeout;
+
     public function name(): string
     {
         return 'ollama';
@@ -111,7 +124,7 @@ final class LocalOllamaProvider implements LlmProviderInterface
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
                 CURLOPT_TIMEOUT => $this->timeout,
-                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
             ]);
 
             $response = curl_exec($ch);

@@ -27,6 +27,14 @@ final class RemoteOllamaProvider implements LlmProviderInterface
     protected int $maxRetries;
 
     /**
+     * Connect phase only — see the note on {@see LocalOllamaProvider::$connectTimeout}.
+     * A generous generation budget must not also become the price of an endpoint that
+     * has gone away and never answers the handshake.
+     */
+    #[Config(env: 'LLM_REMOTE_OLLAMA_CONNECT_TIMEOUT', default: 5)]
+    protected int $connectTimeout;
+
+    /**
      * Clone-only tuning (never injected). null $maxTokens = no `num_predict` cap;
      * $thinking = false sends `think:false` so a thinking-capable model spends its
      * token budget on the answer, not on a reasoning trace we don't consume.
@@ -146,7 +154,7 @@ final class RemoteOllamaProvider implements LlmProviderInterface
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
                 CURLOPT_TIMEOUT => $this->timeout,
-                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
             ]);
 
             $response = curl_exec($ch);
