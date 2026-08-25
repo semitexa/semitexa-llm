@@ -68,6 +68,14 @@ final class GeminiProvider implements LlmProviderInterface
     #[Config(env: 'GEMINI_RETRIES', default: 2)]
     protected int $maxRetries;
 
+    /**
+     * Connect phase only — see the note on {@see LocalOllamaProvider::$connectTimeout}.
+     * A generous generation budget must not also become the price of an endpoint that
+     * has gone away and never answers the handshake.
+     */
+    #[Config(env: 'GEMINI_CONNECT_TIMEOUT', default: 5)]
+    protected int $connectTimeout;
+
     #[Config(env: 'GEMINI_CONTEXT_CACHE', default: false)]
     protected bool $contextCache;
 
@@ -256,7 +264,7 @@ final class GeminiProvider implements LlmProviderInterface
                     'x-goog-api-key: ' . $this->apiKey,
                 ],
                 CURLOPT_TIMEOUT => $this->timeout,
-                CURLOPT_CONNECTTIMEOUT => 10,
+                CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
             ]);
 
             $response = curl_exec($ch);
@@ -497,7 +505,7 @@ final class GeminiProvider implements LlmProviderInterface
                 'x-goog-api-key: ' . $this->apiKey,
             ],
             CURLOPT_TIMEOUT => min($this->timeout, 20),
-            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
         ]);
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
