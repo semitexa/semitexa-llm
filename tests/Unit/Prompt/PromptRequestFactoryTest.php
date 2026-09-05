@@ -13,11 +13,11 @@ final class PromptRequestFactoryTest extends TestCase
 {
     public function testMapsSystemAndUserMessage(): void
     {
-        $rendered = new RenderedPrompt(promptId: 'p', system: 'You are Semi.');
+        $rendered = new RenderedPrompt(promptId: 'p', system: 'You are Solomiia.');
 
         $request = (new PromptRequestFactory())->fromRendered($rendered, 'Hello');
 
-        self::assertSame('You are Semi.', $request->systemPrompt);
+        self::assertSame('You are Solomiia.', $request->systemPrompt);
         self::assertSame('Hello', $request->userMessage);
         self::assertSame([], $request->history);
         self::assertSame([], $request->tools);

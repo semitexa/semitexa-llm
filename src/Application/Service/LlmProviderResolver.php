@@ -36,8 +36,34 @@ final class LlmProviderResolver
     #[InjectAsReadonly]
     protected GeminiProvider $gemini;
 
+    /** Set only by {@see withProvider()}; null in every production path. */
+    private ?LlmProviderInterface $override = null;
+
+    /**
+     * Test seam — production always resolves from `LLM_BACKEND`.
+     *
+     * Every consumer of this resolver reaches a live model, and both this class
+     * and its callers are final with concrete provider properties, so anything
+     * downstream of it was untestable without a network. The rolling
+     * conversation summary is what exposed that: it could never be shown to work
+     * except by calling a real model, which is why it sat unproven.
+     *
+     * Same shape as the ORM and prompt-repository seams elsewhere in the
+     * framework: a `with…()` that a test calls and production never does.
+     */
+    public function withProvider(LlmProviderInterface $provider): self
+    {
+        $this->override = $provider;
+
+        return $this;
+    }
+
     public function provider(): LlmProviderInterface
     {
+        if ($this->override !== null) {
+            return $this->override;
+        }
+
         return match ($this->backend()) {
             LlmBackend::RemoteOllama => $this->remote,
             LlmBackend::Gemini => $this->gemini,
