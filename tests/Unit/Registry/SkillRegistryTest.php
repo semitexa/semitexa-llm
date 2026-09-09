@@ -18,6 +18,25 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 final class SkillRegistryTest extends TestCase
 {
+    public function test_a_ui_skill_can_declare_inputs_without_a_command_to_take_them_from(): void
+    {
+        // A UI skill has no #[AsCommand], so there is no console definition to read
+        // option metadata from. Without declared inputs it can only ever open at
+        // nothing, which is what made "open the pricing page" impossible from chat.
+        $registry = new SkillRegistry();
+        $manifest = $registry->buildManifestFromClasses([UiSkillWithArguments::class]);
+
+        $entry = $manifest->findSkill('Content');
+        $this->assertNotNull($entry);
+        $this->assertTrue($entry->isUi());
+        $this->assertSame(['ui'], $entry->channels);
+        $this->assertSame('/os/app/cms', $entry->entry);
+
+        $this->assertArrayHasKey('ref', $entry->inputs);
+        $this->assertSame('string', $entry->inputs['ref']['type']);
+        $this->assertSame('Which page to open.', $entry->inputs['ref']['description']);
+    }
+
     public function test_builds_manifest_from_annotated_class(): void
     {
         $registry = new SkillRegistry();
@@ -223,4 +242,21 @@ final class CapturingLogger implements LoggerInterface
     public function info(string $message, array $context = []): void {}
     public function notice(string $message, array $context = []): void {}
     public function debug(string $message, array $context = []): void {}
+}
+
+#[AsAiSkill(
+    allowed: true,
+    name: 'Content',
+    summary: 'A UI skill that opens at a particular record.',
+    useWhen: 'Testing.',
+    avoidWhen: 'Production.',
+    confirmation: AiConfirmationMode::Never,
+    argumentPolicy: 'allowlisted',
+    exposeArguments: ['ref'],
+    argumentHints: ['ref' => 'Which page to open.'],
+    channels: ['ui'],
+    entry: '/os/app/cms',
+)]
+final class UiSkillWithArguments
+{
 }
