@@ -11,6 +11,7 @@ use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Domain\Contract\InvocableSkillInterface;
 use Semitexa\Llm\Domain\Model\SkillEntry;
 use Semitexa\Core\Log\LoggerInterface;
+use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
 use Symfony\Component\Console\Command\Command;
@@ -84,7 +85,7 @@ final class SkillRegistry
                     supportsDryRun: $skill->supportsDryRun,
                     argumentPolicy: $skill->resolvedArgumentPolicy,
                     inputs: $inputs,
-                    channels: $skill->channels,
+                    channels: $skill->resolvedChannels,
                     executionKind: $skill->resolvedExecutionKind,
                     skillClass: null,
                     icon: $skill->icon,
@@ -95,7 +96,7 @@ final class SkillRegistry
             // Non-command skill: lifts the #[AsCommand]-only constraint. Needs an
             // explicit name and either an InvocableSkillInterface (it executes) or the
             // 'ui' channel (a UI-skill that opens a dialog instead of executing).
-            $isUi = in_array('ui', $skill->channels, true);
+            $isUi = in_array('ui', $skill->resolvedChannels, true);
             if ($skill->name === null) {
                 return null;
             }
@@ -114,7 +115,7 @@ final class SkillRegistry
                 supportsDryRun: $skill->supportsDryRun,
                 argumentPolicy: $skill->resolvedArgumentPolicy,
                 inputs: $inputs,
-                channels: $skill->channels,
+                channels: $skill->resolvedChannels,
                 executionKind: $skill->resolvedExecutionKind,
                 skillClass: $className,
                 icon: $skill->icon,
@@ -126,11 +127,25 @@ final class SkillRegistry
             // dependency (a TypeError/container error). Never drop it silently:
             // a vanished skill otherwise surfaces only as "the assistant can't do
             // X" with no signal. Log it so the misconfiguration is diagnosable.
-            $this->logger?->warning('Failed to build skill manifest entry', [
+            //
+            // It WAS silent. The optional logger above is never supplied: all
+            // five construction sites in this codebase build the registry with
+            // no logger, and the class is not container-managed, so the comment
+            // above described a promise nothing kept. StaticLoggerBridge is how
+            // the rest of the framework surfaces exactly this — a record skipped
+            // during a scan — and it needs nothing from the caller.
+            $context = [
                 'class' => $className,
                 'exception' => $e::class,
                 'message' => $e->getMessage(),
-            ]);
+            ];
+
+            if ($this->logger !== null) {
+                $this->logger->warning('Failed to build skill manifest entry', $context);
+            } else {
+                StaticLoggerBridge::warning('llm', 'Failed to build skill manifest entry', $context);
+            }
+
             return null;
         }
     }
