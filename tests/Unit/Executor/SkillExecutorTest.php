@@ -6,6 +6,7 @@ namespace Semitexa\Llm\Tests\Unit\Executor;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Llm\Domain\Model\SkillEntry;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Application\Service\SkillExecutor;
@@ -22,7 +23,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 final class SkillExecutorTest extends TestCase
 {
     private Application $application;
-    private SkillManifest $manifest;
+    private ScopedSkillManifest $manifest;
 
     protected function setUp(): void
     {
@@ -30,7 +31,7 @@ final class SkillExecutorTest extends TestCase
         $this->application->setAutoExit(false);
         $this->application->add(new StubExecutorCommand());
 
-        $this->manifest = new SkillManifest(
+        $this->manifest = (new SkillManifest(
             artifact: 'semitexa.ai-skills/v1',
             generatedAt: '2026-03-22T12:00:00+00:00',
             skills: [
@@ -51,7 +52,7 @@ final class SkillExecutorTest extends TestCase
                     executionKind: AiExecutionKind::DirectCommand,
                 ),
             ],
-        );
+        ))->forChannels(['console']);
     }
 
     public function test_executes_skill_successfully(): void
@@ -96,7 +97,7 @@ final class SkillExecutorTest extends TestCase
 
     public function test_requires_mandatory_argument(): void
     {
-        $manifest = new SkillManifest(
+        $manifest = (new SkillManifest(
             artifact: 'semitexa.ai-skills/v1',
             generatedAt: '2026-03-22T12:00:00+00:00',
             skills: [
@@ -117,7 +118,7 @@ final class SkillExecutorTest extends TestCase
                     executionKind: AiExecutionKind::DirectCommand,
                 ),
             ],
-        );
+        ))->forChannels(['console']);
 
         $executor = new SkillExecutor($this->application);
 

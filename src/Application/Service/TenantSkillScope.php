@@ -9,6 +9,7 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\ModuleRegistry;
 use Semitexa\Core\Support\TenantModuleScopeResolver;
 use Semitexa\Llm\Attribute\AsAiSkill;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Domain\Model\SkillScope;
 
@@ -52,7 +53,7 @@ final class TenantSkillScope
      *
      * @param list<string> $channels
      */
-    public function manifestFor(SkillScope $scope, array $channels): SkillManifest
+    public function manifestFor(SkillScope $scope, array $channels): ScopedSkillManifest
     {
         return $this->buildFor($scope)->forChannels($channels);
     }

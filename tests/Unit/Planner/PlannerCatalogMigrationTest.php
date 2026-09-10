@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Llm\Application\Service\Planner;
 use Semitexa\Llm\Application\Prompt\PlannerJsonPrompt;
 use Semitexa\Llm\Application\Prompt\PlannerToolPrompt;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Prompt\Application\Service\PromptRegistry;
 
@@ -22,9 +23,9 @@ use Semitexa\Prompt\Application\Service\PromptRegistry;
  */
 final class PlannerCatalogMigrationTest extends TestCase
 {
-    private function emptyManifest(): SkillManifest
+    private function emptyManifest(): ScopedSkillManifest
     {
-        return new SkillManifest('semitexa.ai-skills/v1', '2026-01-01T00:00:00+00:00', []);
+        return (new SkillManifest('semitexa.ai-skills/v1', '2026-01-01T00:00:00+00:00', []))->forChannels(['console']);
     }
 
     private function neutralize(string $prompt): string

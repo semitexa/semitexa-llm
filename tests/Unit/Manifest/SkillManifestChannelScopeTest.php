@@ -10,6 +10,7 @@ use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
 use Semitexa\Llm\Domain\Enum\AiExecutionKind;
 use Semitexa\Llm\Domain\Enum\AiRiskLevel;
 use Semitexa\Llm\Domain\Model\SkillEntry;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 
 /**
@@ -52,26 +53,57 @@ final class SkillManifestChannelScopeTest extends TestCase
         ]);
     }
 
-    public function test_a_manifest_nobody_narrowed_says_so(): void
+    public function test_a_manifest_nobody_narrowed_cannot_reach_a_planner(): void
     {
+        // Unscoped is every skill the tenant owns, console-only ones included:
+        // the right answer for tooling and the wrong one for planning. It is
+        // now a different TYPE, so the distinction is not a habit any caller
+        // has to remember — Planner, PlannerToolSchema and SkillExecutor all
+        // take ScopedSkillManifest and nothing else.
         $manifest = $this->manifest();
 
-        // Unscoped is every skill the tenant owns, console-only ones included. That
-        // is the right answer for tooling and the wrong one for planning.
-        $this->assertFalse($manifest->isScoped());
-        $this->assertNull($manifest->channels);
         $this->assertCount(3, $manifest->skills);
+        $this->assertNull($manifest->channels);
+
+        $doors = [
+            [\Semitexa\Llm\Application\Service\Planner::class, 'buildSystemPrompt', 0],
+            [\Semitexa\Llm\Application\Service\PlannerToolSchema::class, 'declarationsFor', 0],
+            [\Semitexa\Llm\Application\Service\SkillExecutor::class, 'execute', 2],
+        ];
+        foreach ($doors as [$class, $method, $position]) {
+            $type = (new \ReflectionMethod($class, $method))->getParameters()[$position]->getType();
+            $this->assertInstanceOf(\ReflectionNamedType::class, $type);
+            $this->assertSame(
+                SkillManifestChannelScopeTest::scopedClass(),
+                ltrim((string) $type, '?'),
+                $class . '::' . $method . ' would accept an unscoped manifest',
+            );
+        }
+    }
+
+    private static function scopedClass(): string
+    {
+        return \Semitexa\Llm\Domain\Model\ScopedSkillManifest::class;
+    }
+
+    public function test_an_empty_scope_is_refused_rather_than_treated_as_every_channel(): void
+    {
+        // A manifest scoped to nothing matches nothing, so it is not a narrower
+        // manifest — it is a mistake, and almost always a caller that meant to
+        // pass a channel.
+        $this->expectException(\ValueError::class);
+
+        $this->manifest()->forChannels([]);
     }
 
     public function test_narrowing_records_the_surface_it_was_narrowed_to(): void
     {
         $scoped = $this->manifest()->forChannels(['web', 'ui']);
 
-        $this->assertTrue($scoped->isScoped());
         $this->assertSame(['web', 'ui'], $scoped->channels);
         $this->assertSame(
             ['open-page', 'ask'],
-            array_map(static fn(SkillEntry $s): string => $s->name, $scoped->skills),
+            array_map(static fn(SkillEntry $s): string => $s->name, $scoped->skills()),
             'a console-only skill must not reach a web+ui planner',
         );
     }
@@ -83,7 +115,7 @@ final class SkillManifestChannelScopeTest extends TestCase
         $this->assertSame(['console'], $scoped->channels);
         $this->assertSame(
             ['deploy'],
-            array_map(static fn(SkillEntry $s): string => $s->name, $scoped->skills),
+            array_map(static fn(SkillEntry $s): string => $s->name, $scoped->skills()),
         );
     }
 
@@ -102,10 +134,12 @@ final class SkillManifestChannelScopeTest extends TestCase
         $once = $this->manifest()->forChannels(['web', 'ui']);
         $twice = $once->forChannels(['web', 'ui']);
         $this->assertSame($once->channels, $twice->channels);
-        $this->assertCount(count($once->skills), $twice->skills);
+        $this->assertCount(count($once->skills()), $twice->skills());
 
-        // Narrowing a narrowed manifest cannot bring a dropped skill back.
-        $narrower = $once->forChannels(['console']);
-        $this->assertSame([], $narrower->skills);
+        // Narrowing a narrowed manifest cannot bring a dropped skill back, and
+        // narrowing to a surface it never covered is refused rather than
+        // silently widening to it.
+        $this->expectException(\ValueError::class);
+        $once->forChannels(['console']);
     }
 }

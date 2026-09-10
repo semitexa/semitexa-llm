@@ -47,21 +47,33 @@ final readonly class SkillManifest
     }
 
     /**
-     * A copy keeping only skills exposed on at least one of the given channels.
-     * Used to scope a manifest to a surface (e.g. the OS chat gets web + ui skills,
-     * never console-only dev commands) — which both narrows routing and shrinks the
-     * planner system prompt.
+     * A scoped manifest holding nothing.
+     *
+     * For the "no scope could be resolved" branch a caller reaches when there is
+     * no session: it still has to hand a manifest onward, and handing an
+     * unscoped one would be the exact hole the scoped type closes. Three OS
+     * handlers were each writing this line by hand.
      *
      * @param list<string> $channels
      */
-    public function forChannels(array $channels): self
+    public static function emptyFor(array $channels): ScopedSkillManifest
     {
-        $kept = array_values(array_filter(
-            $this->skills,
-            static fn(SkillEntry $s): bool => array_intersect($s->channels, $channels) !== [],
-        ));
+        return (new self('semitexa.ai-skills/v1', gmdate('c'), []))->forChannels($channels);
+    }
 
-        return new self($this->artifact, $this->generatedAt, $kept, array_values($channels));
+    /**
+     * Narrow this manifest to a surface.
+     *
+     * The ONLY way to produce a {@see ScopedSkillManifest}, which is what every
+     * planner-facing signature takes. Narrowing both shrinks the planner prompt
+     * and decides what may be proposed at all — and the second is the reason it
+     * became a type rather than a habit.
+     *
+     * @param list<string> $channels
+     */
+    public function forChannels(array $channels): ScopedSkillManifest
+    {
+        return new ScopedSkillManifest($this, $channels);
     }
 
     public function findSkill(string $name): ?SkillEntry

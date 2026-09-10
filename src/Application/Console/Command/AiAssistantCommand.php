@@ -11,7 +11,7 @@ use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
-use Semitexa\Llm\Domain\Model\SkillManifest;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Application\Service\SkillExecutor;
 use Semitexa\Llm\Application\Service\PersonaRegistry;
@@ -29,6 +29,12 @@ use Symfony\Component\Console\Style\SymfonyStyle;
 #[AsCommand(name: 'ai', description: 'Start an interactive AI assistant backed by a local LLM. Uses skills defined with #[AsAiSkill].')]
 final class AiAssistantCommand extends Command
 {
+    /**
+     * What this surface is. The CLI assistant runs on the console, and saying so
+     * is what stops it proposing a skill the console cannot run.
+     */
+    private const CHANNEL = 'console';
+
     #[InjectAsReadonly]
     protected LlmProviderResolver $providers;
 
@@ -66,12 +72,17 @@ final class AiAssistantCommand extends Command
         $io->success('Provider is healthy.');
 
         $registry = new SkillRegistry();
-        $manifest = $registry->buildManifest();
+        // Scoped to the surface this actually is. Unscoped, it planned off every
+        // channel and could propose a ui skill that opens a window a terminal
+        // has no way to open — which SkillExecutor, defaulting to 'console',
+        // then refused. The planner proposing what the executor will not run is
+        // what the scoped type exists to make impossible.
+        $manifest = $registry->buildManifest()->forChannels([self::CHANNEL]);
 
-        if ($manifest->skills === []) {
+        if ($manifest->isEmpty()) {
             $io->warning('No AI skills are registered. Add #[AsAiSkill] to command classes to enable skill execution.');
         } else {
-            $io->text(sprintf('%d skill(s) available. Run `ai:skills` to see them.', count($manifest->skills)));
+            $io->text(sprintf('%d skill(s) available. Run `ai:skills` to see them.', count($manifest->skills())));
         }
 
         $planner = new Planner();
@@ -160,7 +171,7 @@ final class AiAssistantCommand extends Command
     private function handleSkillProposal(
         SymfonyStyle $io,
         PlannerResponse $plannerResponse,
-        SkillManifest $manifest,
+        ScopedSkillManifest $manifest,
         ?SkillExecutor $executor,
         bool $dryRun,
         bool $autoConfirm,
@@ -214,7 +225,7 @@ final class AiAssistantCommand extends Command
         }
 
         try {
-            $result = $executor->execute($skillName, $plannerResponse->arguments, $manifest);
+            $result = $executor->execute($skillName, $plannerResponse->arguments, $manifest, self::CHANNEL);
             if ($result->isSuccess()) {
                 $io->success('Skill executed successfully (exit code 0).');
             } else {
