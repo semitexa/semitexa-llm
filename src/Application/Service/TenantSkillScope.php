@@ -9,6 +9,7 @@ use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\ModuleRegistry;
 use Semitexa\Core\Support\TenantModuleScopeResolver;
 use Semitexa\Llm\Attribute\AsAiSkill;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Domain\Model\SkillScope;
 
@@ -37,7 +38,38 @@ final class TenantSkillScope
     /** Module types that ship as packages rather than as this project's own code. */
     private const PACKAGED = ['vendor', 'composer'];
 
-    public function manifestFor(SkillScope $scope): SkillManifest
+    /**
+     * The skills this scope owns that are exposed on at least one of $channels.
+     *
+     * $channels is required on purpose. Every caller of the old single-argument
+     * form was left to remember the filter, and they did not agree: the OS runner
+     * narrowed to web+ui, the terminal re-implemented a console filter inline, the
+     * dialog handler leaned on isUi(), and the shell filtered nothing at all — so
+     * it listed console-only skills as things the admin could run while the runner
+     * refused to execute them. A surface is not an afterthought to a manifest; it
+     * decides what the manifest MEANS.
+     *
+     * Genuinely want everything? Say so with {@see manifestForEveryChannel()}.
+     *
+     * @param list<string> $channels
+     */
+    public function manifestFor(SkillScope $scope, array $channels): ScopedSkillManifest
+    {
+        return $this->buildFor($scope)->forChannels($channels);
+    }
+
+    /**
+     * Every skill this scope owns, on every channel, unscoped.
+     *
+     * For tooling that inspects the whole surface — manifest dumps, docs, audits.
+     * Never for planning or listing: see {@see manifestFor()}.
+     */
+    public function manifestForEveryChannel(SkillScope $scope): SkillManifest
+    {
+        return $this->buildFor($scope);
+    }
+
+    private function buildFor(SkillScope $scope): SkillManifest
     {
         $discovery = new ClassDiscovery();
 

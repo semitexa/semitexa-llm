@@ -9,7 +9,7 @@ use Semitexa\Llm\Application\Prompt\PlannerToolPrompt;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
-use Semitexa\Llm\Domain\Model\SkillManifest;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Prompt\Application\Service\PromptRenderer;
 
 final class Planner
@@ -32,7 +32,7 @@ final class Planner
      *        server-time anchor makes the model resolve "tomorrow"/"завтра" to
      *        the wrong day. Null keeps the server default (legacy behavior).
      */
-    public function buildSystemPrompt(SkillManifest $manifest, ?string $persona = null, ?\DateTimeZone $timezone = null): string
+    public function buildSystemPrompt(ScopedSkillManifest $manifest, ?string $persona = null, ?\DateTimeZone $timezone = null): string
     {
         $persona ??= 'You are a Semitexa framework assistant. Your job is to interpret operator requests and map them to available framework skills.';
 
@@ -93,13 +93,13 @@ final class Planner
     }
 
     /**
-     * @param SkillManifest|null $manifest when given, an unrecognized `type` that
+     * @param ScopedSkillManifest|null $manifest when given, an unrecognized `type` that
      *        actually names a manifest skill is salvaged into a skill proposal —
      *        smaller models routinely emit `{"type":"remember",...}` instead of
      *        `{"type":"propose_skill","skill":"remember",...}`, and refusing such
      *        a reply throws away a perfectly routable intent.
      */
-    public function parseResponse(LlmResponse $response, string $rawUserMessage = '', ?SkillManifest $manifest = null): PlannerResponse
+    public function parseResponse(LlmResponse $response, string $rawUserMessage = '', ?ScopedSkillManifest $manifest = null): PlannerResponse
     {
         if (!$response->success) {
             return new PlannerResponse(
@@ -155,7 +155,7 @@ final class Planner
      *
      * @param array<string, mixed> $decoded
      */
-    private function salvageSkillProposal(array $decoded, ?SkillManifest $manifest): ?PlannerResponse
+    private function salvageSkillProposal(array $decoded, ?ScopedSkillManifest $manifest): ?PlannerResponse
     {
         if ($manifest === null) {
             return null;

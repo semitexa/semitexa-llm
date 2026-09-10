@@ -12,24 +12,25 @@ use Semitexa\Llm\Domain\Enum\AiExecutionKind;
 use Semitexa\Llm\Domain\Enum\AiRiskLevel;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
 use Semitexa\Llm\Domain\Model\SkillEntry;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 
 final class PlannerToolSchemaTest extends TestCase
 {
     private PlannerToolSchema $schema;
-    private SkillManifest $manifest;
+    private ScopedSkillManifest $manifest;
 
     protected function setUp(): void
     {
         $this->schema = new PlannerToolSchema();
-        $this->manifest = new SkillManifest('test', 'now', [
+        $this->manifest = (new SkillManifest('test', 'now', [
             // Colon in the name — invalid as a Gemini function name, must sanitize.
             $this->skill('os:design-skin', inputs: [
                 'prompt' => ['type' => 'string', 'required' => true, 'description' => 'The mood.'],
             ]),
             // No inputs — must still produce a valid (bare object) parameters schema.
             $this->skill('list-tasks', inputs: []),
-        ]);
+        ]))->forChannels(['web']);
     }
 
     public function test_declarations_sanitize_names_and_append_meta_tools(): void
@@ -121,10 +122,10 @@ final class PlannerToolSchemaTest extends TestCase
      */
     public function test_punctuation_collision_disambiguates_both_skills(): void
     {
-        $manifest = new SkillManifest('test', 'now', [
+        $manifest = (new SkillManifest('test', 'now', [
             $this->skill('os:status', inputs: []),
             $this->skill('os_status', inputs: []),
-        ]);
+        ]))->forChannels(['web']);
 
         $names = array_column($this->schema->declarationsFor($manifest), 'name');
         self::assertContains('os_status', $names);
@@ -144,10 +145,10 @@ final class PlannerToolSchemaTest extends TestCase
     public function test_64_char_prefix_collision_disambiguates_both_skills(): void
     {
         $prefix = str_repeat('a', 64);
-        $manifest = new SkillManifest('test', 'now', [
+        $manifest = (new SkillManifest('test', 'now', [
             $this->skill($prefix . '-first', inputs: []),
             $this->skill($prefix . '-second', inputs: []),
-        ]);
+        ]))->forChannels(['web']);
 
         $names = array_column($this->schema->declarationsFor($manifest), 'name');
         self::assertContains($prefix, $names);
@@ -166,9 +167,9 @@ final class PlannerToolSchemaTest extends TestCase
      */
     public function test_skill_named_like_a_meta_tool_does_not_shadow_it(): void
     {
-        $manifest = new SkillManifest('test', 'now', [
+        $manifest = (new SkillManifest('test', 'now', [
             $this->skill(PlannerToolSchema::FINAL_ANSWER, inputs: []),
-        ]);
+        ]))->forChannels(['web']);
 
         $names = array_column($this->schema->declarationsFor($manifest), 'name');
         self::assertContains(PlannerToolSchema::FINAL_ANSWER, $names);

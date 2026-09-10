@@ -7,10 +7,10 @@ namespace Semitexa\Llm\Application\Service;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
 use Semitexa\Llm\Domain\Model\PlannerResponse;
 use Semitexa\Llm\Domain\Model\SkillEntry;
-use Semitexa\Llm\Domain\Model\SkillManifest;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 
 /**
- * Bridges the {@see SkillManifest} to native function-calling: it turns the skills
+ * Bridges the {@see ScopedSkillManifest} to native function-calling: it turns the skills
  * into provider-agnostic tool declarations and maps a returned tool call back into
  * a {@see PlannerResponse}.
  *
@@ -39,12 +39,12 @@ final class PlannerToolSchema
      *
      * @return list<array{name: string, description: string, parameters: array<string, mixed>}>
      */
-    public function declarationsFor(SkillManifest $manifest): array
+    public function declarationsFor(ScopedSkillManifest $manifest): array
     {
         $names = $this->assignedNames($manifest);
         $declarations = [];
 
-        foreach ($manifest->skills as $skill) {
+        foreach ($manifest->skills() as $skill) {
             $declarations[] = $this->skillDeclaration($skill, $names[$skill->name]);
         }
 
@@ -77,7 +77,7 @@ final class PlannerToolSchema
      *
      * @param array{name: string, arguments: array<string, mixed>} $toolCall
      */
-    public function mapToolCall(array $toolCall, SkillManifest $manifest): PlannerResponse
+    public function mapToolCall(array $toolCall, ScopedSkillManifest $manifest): PlannerResponse
     {
         $name = $toolCall['name'];
         $arguments = $toolCall['arguments'];
@@ -184,7 +184,7 @@ final class PlannerToolSchema
         ];
     }
 
-    private function resolveSkillName(string $toolName, SkillManifest $manifest): ?string
+    private function resolveSkillName(string $toolName, ScopedSkillManifest $manifest): ?string
     {
         $canonical = array_search($toolName, $this->assignedNames($manifest), true);
         if ($canonical !== false) {
@@ -214,12 +214,12 @@ final class PlannerToolSchema
      *
      * @return array<string, string> skill name (canonical) => assigned tool name
      */
-    private function assignedNames(SkillManifest $manifest): array
+    private function assignedNames(ScopedSkillManifest $manifest): array
     {
         $used = array_fill_keys(self::RESERVED_NAMES, true);
         $assigned = [];
 
-        foreach ($manifest->skills as $skill) {
+        foreach ($manifest->skills() as $skill) {
             $base = self::sanitizeName($skill->name);
             $candidate = $base;
             for ($suffix = 2; isset($used[$candidate]); $suffix++) {

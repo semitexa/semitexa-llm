@@ -7,6 +7,7 @@ namespace Semitexa\Llm\Tests\Unit\Planner;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 use Semitexa\Llm\Domain\Enum\PlannerResponseType;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Domain\Model\SkillManifest;
 use Semitexa\Llm\Application\Service\Planner;
 use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
@@ -178,11 +179,11 @@ final class PlannerTest extends TestCase
 
     public function test_system_prompt_contains_skill_manifest(): void
     {
-        $manifest = new SkillManifest(
+        $manifest = (new SkillManifest(
             artifact: 'semitexa.ai-skills/v1',
             generatedAt: '2026-03-22T12:00:00+00:00',
             skills: [],
-        );
+        ))->forChannels(['web']);
 
         $prompt = $this->planner->buildSystemPrompt($manifest);
 
@@ -193,7 +194,7 @@ final class PlannerTest extends TestCase
 
     public function test_system_prompt_date_anchor_uses_given_timezone(): void
     {
-        $manifest = new SkillManifest(artifact: 'semitexa.ai-skills/v1', generatedAt: '2026-03-22T12:00:00+00:00', skills: []);
+        $manifest = (new SkillManifest(artifact: 'semitexa.ai-skills/v1', generatedAt: '2026-03-22T12:00:00+00:00', skills: []))->forChannels(['web']);
         $zone = new \DateTimeZone('Pacific/Kiritimati'); // UTC+14 — maximally far from a UTC server clock
 
         $before = new \DateTimeImmutable('now', $zone);
@@ -263,9 +264,9 @@ final class PlannerTest extends TestCase
         $this->assertSame(PlannerResponseType::Refuse, $result->type);
     }
 
-    private function manifestWith(string $skillName): SkillManifest
+    private function manifestWith(string $skillName): ScopedSkillManifest
     {
-        return new SkillManifest(
+        return (new SkillManifest(
             artifact: 'semitexa.ai-skills/v1',
             generatedAt: '2026-03-22T12:00:00+00:00',
             skills: [new SkillEntry(
@@ -283,6 +284,6 @@ final class PlannerTest extends TestCase
                 executionKind: AiExecutionKind::DirectCommand,
                 skillClass: 'App\\Fake\\RememberSkill',
             )],
-        );
+        ))->forChannels(['web']);
     }
 }

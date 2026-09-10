@@ -7,7 +7,7 @@ namespace Semitexa\Llm\Application\Service;
 use Semitexa\Llm\Domain\Contract\InvocableSkillInterface;
 use Semitexa\Llm\Domain\Model\ExecutionResult;
 use Semitexa\Llm\Domain\Model\SkillEntry;
-use Semitexa\Llm\Domain\Model\SkillManifest;
+use Semitexa\Llm\Domain\Model\ScopedSkillManifest;
 use Semitexa\Llm\Exception\PolicyViolationException;
 use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
 use Symfony\Component\Console\Application;
@@ -31,7 +31,7 @@ final class SkillExecutor
     public function execute(
         string $skillName,
         array $arguments,
-        SkillManifest $manifest,
+        ScopedSkillManifest $manifest,
         string $channel = 'console',
     ): ExecutionResult {
         $entry = $manifest->findSkill($skillName);
