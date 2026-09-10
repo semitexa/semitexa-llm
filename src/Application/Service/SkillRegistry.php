@@ -100,8 +100,23 @@ final class SkillRegistry
             if ($skill->name === null) {
                 return null;
             }
-            if (!$isUi && !$ref->implementsInterface(InvocableSkillInterface::class)) {
+            $invocable = $ref->implementsInterface(InvocableSkillInterface::class);
+
+            if (!$isUi && !$invocable) {
                 return null;
+            }
+
+            // A UI skill opens a window; it has nothing to run. Declaring it on
+            // an executable channel too puts it in that channel's manifest,
+            // where the planner may propose it and SkillExecutor then fails to
+            // invoke what does not implement the interface — a proposal the
+            // executor refuses, which is the shape the scoped manifest exists
+            // to prevent. Thrown so the drop is logged with the class name.
+            if ($isUi && !$invocable && array_diff($skill->resolvedChannels, ['ui']) !== []) {
+                throw new \ValueError(
+                    'A UI skill that does not implement InvocableSkillInterface may declare only the '
+                    . "'ui' channel; got: " . implode(', ', $skill->resolvedChannels) . '.',
+                );
             }
 
             return new SkillEntry(

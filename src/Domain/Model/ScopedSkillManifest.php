@@ -87,9 +87,19 @@ final readonly class ScopedSkillManifest
         return $this->manifest->toArray();
     }
 
-    /** Narrow further. Never widens: the result is the intersection. */
+    /**
+     * Narrow further. Never widens: the result is the intersection.
+     *
+     * The incoming names are normalised the same way the constructor does them,
+     * so ' Web ' intersects with 'web' rather than matching nothing and failing
+     * as an empty scope.
+     *
+     * @param list<string> $channels
+     */
     public function forChannels(array $channels): self
     {
-        return new self($this->manifest, array_values(array_intersect($this->channels, $channels)));
+        $wanted = array_map(static fn(string $c): string => trim($c), $channels);
+
+        return new self($this->manifest, array_values(array_intersect($this->channels, $wanted)));
     }
 }

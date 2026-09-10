@@ -35,6 +35,29 @@ final class SkillRegistryTest extends TestCase
         };
     }
 
+    public function test_a_ui_skill_that_cannot_run_may_not_claim_a_channel_that_runs(): void
+    {
+        // It has no invoke(): a UI skill opens a window. Declaring 'console'
+        // alongside 'ui' put it in the console manifest, where the planner could
+        // propose it and SkillExecutor would then fail to invoke what does not
+        // implement the interface — a proposal the executor refuses, which is
+        // exactly what the scoped manifest exists to prevent.
+        $logger = self::capturingLogger();
+        StaticLoggerBridge::set($logger);
+        try {
+            $manifest = (new SkillRegistry())->buildManifestFromClasses([UiSkillOnExecutableChannel::class]);
+        } finally {
+            StaticLoggerBridge::reset();
+        }
+
+        $this->assertSame([], $manifest->skills, 'a skill nothing can run must not reach a manifest');
+        $this->assertStringContainsString(
+            'UiSkillOnExecutableChannel',
+            json_encode($logger->warnings, JSON_UNESCAPED_SLASHES),
+            'dropped without a trace is the failure this drop exists to avoid',
+        );
+    }
+
     public function test_channels_can_come_from_one_env_var(): void
     {
         // A project turning a skill on for its bot wants to set one variable,
@@ -374,4 +397,15 @@ final class EnvChannelledEntrySkill implements \Semitexa\Llm\Domain\Contract\Inv
 final class NoSurfaceSkill implements \Semitexa\Llm\Domain\Contract\InvocableSkillInterface
 {
     public function invoke(array $arguments): string { return 'ok'; }
+}
+
+#[AsAiSkill(
+    allowed: true,
+    name: 'ui-on-console',
+    summary: 'A UI skill that also claims an executable channel.',
+    channels: ['ui', 'console'],
+    entry: '/os/app/nowhere',
+)]
+final class UiSkillOnExecutableChannel
+{
 }
