@@ -19,7 +19,6 @@ use Semitexa\Llm\Application\Service\Planner;
 use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
 use Semitexa\Llm\Application\Service\SkillRegistry;
 use Semitexa\Llm\Application\Service\ConversationSession;
-use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
