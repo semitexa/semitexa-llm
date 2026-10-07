@@ -69,9 +69,17 @@ final class ConnectTimeoutBoundedTest extends TestCase
     public function the_providers_exempted_here_really_open_no_connection(): void
     {
         foreach (self::OPENS_NO_CONNECTION as $name) {
+            self::assertTrue(class_exists('Semitexa\\Llm\\Application\\Service\\' . $name), "{$name} is exempted but does not exist");
             $source = file_get_contents(\dirname(__DIR__, 3) . '/src/Application/Service/' . $name . '.php');
-            self::assertIsString($source, "{$name} is exempted but does not exist");
-            self::assertDoesNotMatchRegularExpression('/curl_|fsockopen|stream_socket_client|Http\\\\|file_get_contents\(\s*[\'"]https?:/', $source, "{$name} is exempted as network-free but opens a connection");
+            self::assertIsString($source, "{$name} is exempted but its source is missing");
+            self::assertStringContainsString('class ' . $name, $source, "{$name} is exempted but its source declares no such class");
+            // Any stream or socket opener, whatever its argument: a URL held in a
+            // variable opens a connection just as well as a literal one does.
+            self::assertDoesNotMatchRegularExpression(
+                '/\b(?:curl_\w+|fsockopen|pfsockopen|stream_socket_client|socket_connect|fopen|file_get_contents|file|readfile|get_headers)\s*\(|Http\\\\|Client\b/',
+                $source,
+                "{$name} is exempted as network-free but can open a connection",
+            );
         }
     }
 
