@@ -48,10 +48,31 @@ final class ConnectTimeoutBoundedTest extends TestCase
 
         $cases = [];
         foreach ($files as $file) {
+            if (in_array(basename($file, '.php'), self::OPENS_NO_CONNECTION, true)) {
+                continue; // see the_providers_exempted_here_really_open_no_connection()
+            }
             $cases[basename($file, '.php')] = [$file];
         }
 
         return $cases;
+    }
+
+    /**
+     * Providers that answer without a network call, so there is no handshake to
+     * bound. Named one by one rather than detected, so a new provider that does
+     * open a connection cannot slip out of the rule by using a client this file
+     * does not know about.
+     */
+    private const OPENS_NO_CONNECTION = ['ScriptedProvider'];
+
+    #[Test]
+    public function the_providers_exempted_here_really_open_no_connection(): void
+    {
+        foreach (self::OPENS_NO_CONNECTION as $name) {
+            $source = file_get_contents(\dirname(__DIR__, 3) . '/src/Application/Service/' . $name . '.php');
+            self::assertIsString($source, "{$name} is exempted but does not exist");
+            self::assertDoesNotMatchRegularExpression('/curl_|fsockopen|stream_socket_client|Http\\\\|file_get_contents\(\s*[\'"]https?:/', $source, "{$name} is exempted as network-free but opens a connection");
+        }
     }
 
     #[Test]

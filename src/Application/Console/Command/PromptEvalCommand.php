@@ -89,7 +89,7 @@ final class PromptEvalCommand extends Command
             $output->writeln((string) json_encode(
                 ['id' => $id, 'provider' => $this->providers->provider()->name(), 'effective' => $effective, 'default' => $default],
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
-            ));
+            ), OutputInterface::OUTPUT_RAW);
 
             // Mirror the human path's exit code — a failed eval must not report
             // SUCCESS to a script/CI checking `--json` exit codes.
