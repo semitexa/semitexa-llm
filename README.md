@@ -32,7 +32,7 @@ Depends on `semitexa/core` for attribute discovery and the console command syste
 | `remote_ollama` | `LLM_REMOTE_OLLAMA_URL` (required), `LLM_REMOTE_OLLAMA_MODEL` (`gemma4:e2b`), `LLM_REMOTE_OLLAMA_TIMEOUT` (120), `LLM_REMOTE_OLLAMA_RETRIES` (2), `LLM_REMOTE_OLLAMA_CONNECT_TIMEOUT` (5) |
 | `gemini` | `GEMINI_API_KEY` (a Gemini API key from Google AI Studio), `GEMINI_MODEL` (`gemini-2.5-flash`), `GEMINI_BASE_URL`, `GEMINI_TIMEOUT` (120), `GEMINI_RETRIES` (2), `GEMINI_CONNECT_TIMEOUT` (5), `GEMINI_CONTEXT_CACHE` (off) |
 
-`LLM_DECIDER_MODEL` (optional) routes silent classification and tool-picking to a cheaper model on the same provider.
+`LLM_DECIDER_MODEL` (optional) routes silent classification and tool-picking to a cheaper model on the same provider. Only providers that can switch model honour it (Gemini today); on the Ollama backends it is ignored.
 
 `LLM_PROVIDER=ollama` is not read by this package: it tells `bin/semitexa server:start` to add the `docker-compose.ollama.yml` overlay, which runs an Ollama container in the project stack and points `LLM_BASE_URL` at it (`http://ollama:11434`).
 
