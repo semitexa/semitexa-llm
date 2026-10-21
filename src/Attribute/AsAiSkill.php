@@ -78,6 +78,16 @@ final class AsAiSkill
          * @var array<string, string>
          */
         public array $argumentHints = [],
+        /**
+         * For the server operator only: left out of every tenant admin's
+         * manifest, packaged or not, so they are neither offered it nor can
+         * have the planner, the runner or the dialog opener run it. For a
+         * skill whose surface reads across tenants (the queues, the server's
+         * own state), which a packaged skill would otherwise show every
+         * site's admin. A request straight to its entry or command is not
+         * stopped by this: those refuse on their own.
+         */
+        public bool $operatorOnly = false,
     ) {
         $this->resolvedAllowed = $this->resolveAllowed($allowed);
         $this->resolvedChannels = self::resolveChannels($channels);
