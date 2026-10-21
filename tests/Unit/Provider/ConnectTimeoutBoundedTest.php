@@ -90,15 +90,17 @@ final class ConnectTimeoutBoundedTest extends TestCase
         $source = file_get_contents($file);
         self::assertIsString($source);
 
+        // Raw curl options, or the connectTimeout: argument of the call that
+        // goes through the framework's HTTP client (ProviderHttp).
         preg_match_all(
-            '/CURLOPT_CONNECTTIMEOUT\s*=>\s*([^,\n]+)/',
+            '/(?:CURLOPT_CONNECTTIMEOUT\s*=>|\bconnectTimeout:)\s*([^,\n)]+)/',
             $source,
             $matches,
             PREG_OFFSET_CAPTURE,
         );
         self::assertNotEmpty($matches[1], basename($file) . ' sets no connect timeout at all');
 
-        // By POSITION, not by text. The probe's own line is `CURLOPT_CONNECTTIMEOUT => 3`, so a
+        // By POSITION, not by text. The probe's own line sets a connect timeout of 3, so a
         // str_contains() check against the probe's body would happily bless an identical literal
         // written inside complete() — which is exactly the hole this guard is meant to close.
         [$probeStart, $probeEnd] = self::methodBounds($source, 'healthCheck');

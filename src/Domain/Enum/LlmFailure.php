@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Domain\Enum;
 
+use Semitexa\Core\Http\Client\HttpTransportKind;
+
 /**
  * Why a model call failed, as a provider tells it — what a FailoverProvider
  * decides on. Reading it from the error text broke as soon as a provider
@@ -88,6 +90,16 @@ enum LlmFailure: string
             408 => self::Timeout,
             400, 403 => self::fromErrorBody($status, $body),
             default => self::BadRequest,
+        };
+    }
+
+    /** No HTTP answer came: what the client says went wrong. */
+    public static function fromTransport(HttpTransportKind $kind): self
+    {
+        return match ($kind) {
+            HttpTransportKind::Timeout => self::Timeout,
+            HttpTransportKind::TooLarge => self::Malformed,
+            default => self::Network,
         };
     }
 
