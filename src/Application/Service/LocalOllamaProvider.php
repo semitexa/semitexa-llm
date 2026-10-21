@@ -9,6 +9,7 @@ use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
 use Semitexa\Llm\Domain\Model\LlmRequest;
+use Semitexa\Llm\Domain\Enum\LlmFailure;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
 #[SatisfiesServiceContract(of: LlmProviderInterface::class, factoryKey: LlmBackend::Local)]
@@ -38,6 +39,18 @@ final class LocalOllamaProvider implements LlmProviderInterface
      */
     #[Config(env: 'LLM_CONNECT_TIMEOUT', default: 5)]
     protected int $connectTimeout;
+
+    /**
+     * Gives up after the first failure: a model with a reserve behind it hands
+     * over at once instead of retrying (FailoverProvider, LlmProviderResolver::route()).
+     */
+    public function withoutRetries(): self
+    {
+        $c = clone $this;
+        $c->maxRetries = 0;
+
+        return $c;
+    }
 
     public function name(): string
     {
@@ -106,6 +119,7 @@ final class LocalOllamaProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Failed to encode request: ' . json_last_error_msg(),
+                failure: LlmFailure::BadRequest,
                 latencyMs: 0,
             );
         }
@@ -147,6 +161,7 @@ final class LocalOllamaProvider implements LlmProviderInterface
                     content: '',
                     success: false,
                     error: $curlError !== '' ? $curlError : "HTTP {$httpCode}{$detail}",
+                    failure: LlmFailure::fromHttp((int) $httpCode, $curlError, is_string($response) ? $response : ''),
                     latencyMs: $latencyMs,
                 );
             }
@@ -160,6 +175,7 @@ final class LocalOllamaProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Invalid response structure from Ollama',
+                failure: LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }

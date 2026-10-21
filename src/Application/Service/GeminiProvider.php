@@ -9,8 +9,10 @@ use Semitexa\Core\Attribute\Config;
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
+use Semitexa\Llm\Domain\Contract\SupportsToolCallingInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
 use Semitexa\Llm\Domain\Model\LlmRequest;
+use Semitexa\Llm\Domain\Enum\LlmFailure;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
 /**
@@ -51,7 +53,7 @@ use Semitexa\Llm\Domain\Model\LlmResponse;
  *   gracefully to the uncached path.
  */
 #[SatisfiesServiceContract(of: LlmProviderInterface::class, factoryKey: LlmBackend::Gemini)]
-final class GeminiProvider implements LlmProviderInterface
+final class GeminiProvider implements LlmProviderInterface, SupportsToolCallingInterface
 {
     #[Config(env: 'GEMINI_API_KEY', default: '')]
     protected string $apiKey;
@@ -134,6 +136,18 @@ final class GeminiProvider implements LlmProviderInterface
 
     /** Reuse a cache only while it has at least this long left to live. */
     private const CACHE_EXPIRY_MARGIN_S = 30;
+
+    /**
+     * Gives up after the first failure: a model with a reserve behind it hands
+     * over at once instead of retrying (FailoverProvider, LlmProviderResolver::route()).
+     */
+    public function withoutRetries(): self
+    {
+        $c = clone $this;
+        $c->maxRetries = 0;
+
+        return $c;
+    }
 
     public function name(): string
     {
@@ -220,6 +234,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'GEMINI_API_KEY is not configured',
+                failure: LlmFailure::Unconfigured,
                 latencyMs: 0,
             );
         }
@@ -241,6 +256,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Failed to encode request: ' . json_last_error_msg(),
+                failure: LlmFailure::BadRequest,
                 latencyMs: 0,
             );
         }
@@ -304,6 +320,7 @@ final class GeminiProvider implements LlmProviderInterface
                     content: '',
                     success: false,
                     error: $curlError !== '' ? $curlError : "HTTP {$httpCode}{$detail}",
+                    failure: LlmFailure::fromHttp((int) $httpCode, $curlError, is_string($response) ? $response : ''),
                     latencyMs: $latencyMs,
                 );
             }
@@ -317,6 +334,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Invalid response structure from Gemini',
+                failure: LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }
@@ -327,6 +345,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Prompt blocked by Gemini: ' . (string) $decoded['promptFeedback']['blockReason'],
+                failure: LlmFailure::Refused,
                 latencyMs: $latencyMs,
             );
         }
@@ -338,6 +357,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Gemini returned no content (finishReason: ' . (string) $finishReason . ')',
+                failure: in_array($finishReason, ['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'], true) ? LlmFailure::Refused : LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }

@@ -11,6 +11,8 @@ use Semitexa\Llm\Application\Service\LlmProviderResolver;
 use Semitexa\Llm\Application\Service\LocalOllamaProvider;
 use Semitexa\Llm\Application\Service\RemoteOllamaProvider;
 use Semitexa\Llm\Application\Service\ScriptedProvider;
+use Semitexa\Llm\Application\Service\Failover\FailoverProvider;
+use Semitexa\Llm\Domain\Contract\LlmRouteOverrideInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
 
 /**
@@ -20,7 +22,7 @@ use Semitexa\Llm\Domain\Enum\LlmBackend;
  */
 final class LlmProviderResolverTest extends TestCase
 {
-    private const ENV = ['LLM_BACKEND', 'LLM_DECIDER_MODEL', 'LLM_DECIDER_MODEL_ANTHROPIC', 'LLM_DECIDER_MODEL_GEMINI'];
+    private const ENV = ['LLM_BACKEND', 'LLM_DECIDER_MODEL', 'LLM_DECIDER_MODEL_ANTHROPIC', 'LLM_DECIDER_MODEL_GEMINI', 'LLM_FALLBACK', 'LLM_ROUTE_CHAT', 'LLM_ROUTE_POSTS'];
 
     protected function setUp(): void
     {
@@ -104,20 +106,143 @@ final class LlmProviderResolverTest extends TestCase
         $this->assertSame($scripted, $resolver->deciderProvider(LlmBackend::Anthropic));
     }
 
+    public function test_reserves_stand_behind_the_env_backend_on_a_route(): void
+    {
+        putenv('LLM_BACKEND=anthropic');
+        putenv('LLM_FALLBACK=gemini:gemini-flash-lite-latest, nonsense ,local');
+        $resolver = $this->resolver();
+        $route = $resolver->route('posts');
+
+        $this->assertInstanceOf(FailoverProvider::class, $route);
+        $this->assertSame(['anthropic:claude-opus-5-5', 'gemini:gemini-flash-lite-latest', 'ollama:gemma'], array_map(static fn ($p) => $p->name() . ':' . $p->model(), $route->providers()), 'an unknown name is left out, not read as local; a reserve keeps its model');
+        $this->assertSame(['anthropic', 'gemini:gemini-flash-lite-latest', 'local'], $resolver->routeSpecs('posts'));
+        // provider() stays one model: its callers tune it by its class.
+        $this->assertInstanceOf(AnthropicProvider::class, $resolver->provider());
+        $this->assertInstanceOf(AnthropicProvider::class, $resolver->deciderProvider());
+    }
+
+    public function test_a_reserve_behind_a_model_means_that_model_does_not_retry(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_ROUTE_CHAT=anthropic,gemini');
+        $members = $this->resolver()->route('chat')->providers();
+
+        $this->assertSame(0, $this->get($members[0], 'maxRetries'), 'Claude hands over at its first failure');
+        $this->assertNotSame(0, $this->get($members[1], 'maxRetries'), 'the last one keeps its retries');
+    }
+
+    public function test_no_reserves_keeps_the_plain_provider(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+
+        $this->assertInstanceOf(GeminiProvider::class, $this->resolver()->provider());
+        $this->assertInstanceOf(GeminiProvider::class, $this->resolver()->route('chat'), 'an unconfigured route is the env backend');
+    }
+
+    public function test_a_route_runs_on_its_own_models_and_its_deciders_on_theirs(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_ROUTE_CHAT=anthropic:claude-opus-5-5,gemini');
+        putenv('LLM_DECIDER_MODEL_ANTHROPIC=claude-haiku-5-5');
+        putenv('LLM_DECIDER_MODEL=gemini-flash-lite-latest');
+        $resolver = $this->resolver();
+
+        $route = $resolver->route('chat');
+        $this->assertInstanceOf(FailoverProvider::class, $route);
+        $this->assertSame(['claude-opus-5-5', 'gemini-3.8-flash'], array_map(static fn ($p) => $p->model(), $route->providers()));
+
+        $decider = $resolver->deciderRoute('chat');
+        $this->assertInstanceOf(FailoverProvider::class, $decider);
+        $this->assertSame(['claude-haiku-5-5', 'gemini-flash-lite-latest'], array_map(static fn ($p) => $p->model(), $decider->providers()));
+        $this->assertTrue($resolver->routeSupportsTools('chat'));
+        $this->assertFalse($resolver->membersSupportTools(['anthropic', 'local']), 'a text-only reserve would never get a request with tools');
+        $this->assertInstanceOf(GeminiProvider::class, $resolver->provider(), 'the rest of the application stays on LLM_BACKEND');
+    }
+
+    public function test_a_bound_override_decides_before_the_env(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_ROUTE_CHAT=gemini');
+        $resolver = $this->resolver();
+        $this->set($resolver, 'routeOverride', new class implements LlmRouteOverrideInterface {
+            public function members(string $route): ?array
+            {
+                return $route === 'chat' ? ['anthropic', 'gemini'] : null;
+            }
+        });
+
+        $this->assertSame('anthropic', $resolver->route('chat')->name());
+        $this->assertInstanceOf(GeminiProvider::class, $resolver->route('posts'), 'null leaves a route to its env');
+    }
+
+    public function test_an_override_that_throws_leaves_the_route_to_its_env(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_ROUTE_CHAT=anthropic');
+        $resolver = $this->resolver();
+        $this->set($resolver, 'routeOverride', new class implements LlmRouteOverrideInterface {
+            public function members(string $route): ?array
+            {
+                throw new \RuntimeException('settings table is gone');
+            }
+        });
+
+        $this->assertSame('anthropic', $resolver->route('chat')->name(), 'a setting that cannot be read does not silence the feature');
+    }
+
+    public function test_one_read_builds_both_phases_of_a_turn(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_DECIDER_MODEL_ANTHROPIC=claude-haiku-5-5');
+        $resolver = $this->resolver();
+        $specs = ['anthropic', 'gemini'];
+
+        $this->assertSame('claude-opus-5-5', $resolver->fromMembers($specs)->model());
+        $this->assertSame('claude-haiku-5-5', $resolver->fromMembers($specs, decider: true)->model());
+        $this->assertTrue($resolver->membersSupportTools($specs));
+    }
+
+    public function test_a_route_of_local_models_takes_no_tools(): void
+    {
+        putenv('LLM_BACKEND=local');
+        putenv('LLM_ROUTE_CHAT=local,remote_ollama');
+
+        $this->assertFalse($this->resolver()->routeSupportsTools('chat'));
+    }
+
+    public function test_the_test_seam_answers_every_route(): void
+    {
+        putenv('LLM_ROUTE_CHAT=anthropic,gemini');
+        $scripted = new ScriptedProvider(['hi']);
+        $resolver = $this->resolver()->withProvider($scripted);
+
+        $this->assertSame($scripted, $resolver->route('chat'));
+        $this->assertSame($scripted, $resolver->deciderRoute('chat'));
+    }
+
     private function resolver(): LlmProviderResolver
     {
         $resolver = new LlmProviderResolver();
         $gemini = new GeminiProvider();
         $this->set($gemini, 'model', 'gemini-3.8-flash');
+        $this->set($gemini, 'maxRetries', 2);
         $anthropic = new AnthropicProvider();
         $this->set($anthropic, 'model', 'claude-opus-5-5');
+        $this->set($anthropic, 'maxRetries', 2);
+        $local = new LocalOllamaProvider();
+        $this->set($local, 'model', 'gemma');
 
-        $this->set($resolver, 'local', new LocalOllamaProvider());
+        $this->set($resolver, 'local', $local);
         $this->set($resolver, 'remote', new RemoteOllamaProvider());
         $this->set($resolver, 'gemini', $gemini);
         $this->set($resolver, 'anthropic', $anthropic);
 
         return $resolver;
+    }
+
+    private function get(object $target, string $property): mixed
+    {
+        return (new \ReflectionProperty($target, $property))->getValue($target);
     }
 
     private function set(object $target, string $property, mixed $value): void

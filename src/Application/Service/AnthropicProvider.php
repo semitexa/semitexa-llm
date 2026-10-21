@@ -7,8 +7,10 @@ namespace Semitexa\Llm\Application\Service;
 use Semitexa\Core\Attribute\Config;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
+use Semitexa\Llm\Domain\Contract\SupportsToolCallingInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
 use Semitexa\Llm\Domain\Model\LlmRequest;
+use Semitexa\Llm\Domain\Enum\LlmFailure;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
 /**
@@ -45,7 +47,7 @@ use Semitexa\Llm\Domain\Model\LlmResponse;
  * `LlmResponse::$cachedTokens` to see whether it pays off.
  */
 #[SatisfiesServiceContract(of: LlmProviderInterface::class, factoryKey: LlmBackend::Anthropic)]
-final class AnthropicProvider implements LlmProviderInterface
+final class AnthropicProvider implements LlmProviderInterface, SupportsToolCallingInterface
 {
     private const API_VERSION = '2023-06-01';
 
@@ -89,6 +91,18 @@ final class AnthropicProvider implements LlmProviderInterface
      */
     #[Config(env: 'ANTHROPIC_EFFORT', default: '')]
     protected string $effort;
+
+    /**
+     * Gives up after the first failure: a model with a reserve behind it hands
+     * over at once instead of retrying (FailoverProvider, LlmProviderResolver::route()).
+     */
+    public function withoutRetries(): self
+    {
+        $c = clone $this;
+        $c->maxRetries = 0;
+
+        return $c;
+    }
 
     public function name(): string
     {
@@ -176,6 +190,7 @@ final class AnthropicProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'ANTHROPIC_API_KEY is not configured',
+                failure: LlmFailure::Unconfigured,
                 latencyMs: 0,
             );
         }
@@ -186,6 +201,7 @@ final class AnthropicProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Failed to encode request: ' . json_last_error_msg(),
+                failure: LlmFailure::BadRequest,
                 latencyMs: 0,
             );
         }
@@ -229,6 +245,7 @@ final class AnthropicProvider implements LlmProviderInterface
                     content: '',
                     success: false,
                     error: $curlError !== '' ? $curlError : "HTTP {$httpCode}" . $this->errorDetail($response),
+                    failure: LlmFailure::fromHttp((int) $httpCode, $curlError, is_string($response) ? $response : ''),
                     latencyMs: $latencyMs,
                 );
             }
@@ -390,6 +407,7 @@ final class AnthropicProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Invalid response structure from Claude',
+                failure: LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }
@@ -406,6 +424,7 @@ final class AnthropicProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Claude declined the request (refusal' . (is_string($category) ? ": {$category}" : '') . ')',
+                failure: LlmFailure::Refused,
                 latencyMs: $latencyMs,
             );
         }
@@ -433,6 +452,7 @@ final class AnthropicProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Claude returned no content (stop_reason: ' . ($stopReason !== '' ? $stopReason : 'unknown') . ')',
+                failure: LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }
