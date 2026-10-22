@@ -106,6 +106,50 @@ final class ProviderHttpPathTest extends TestCase
     }
 
     #[Test]
+    public function gemini_replays_on_an_expired_cache_in_either_wording(): void
+    {
+        $http = (new FakeHttpClient())->queue(
+            HttpResponse::make(400, '{"error":{"status":"INVALID_ARGUMENT","message":"Cache content 1234 is expired."}}'),
+            HttpResponse::make(200, (string) json_encode(['candidates' => [['content' => ['parts' => [['text' => 'ok']]]]]])),
+        );
+        $gemini = $this->gemini($http);
+        $request = new LlmRequest('A long persona', 'hi');
+        $fingerprint = (string) (new \ReflectionMethod($gemini, 'prefixFingerprint'))->invoke($gemini, $request);
+        (new \ReflectionProperty(GeminiProvider::class, 'cachedPrefixes'))->setValue(null, [$fingerprint => ['name' => 'cachedContents/old', 'expiresAt' => time() + 3600]]);
+
+        self::assertTrue($gemini->complete($request)->success);
+        self::assertCount(2, $http->recorded());
+    }
+
+    /** A request that is simply bad failed twice, and dropped a good cache for every worker. */
+    #[Test]
+    public function gemini_does_not_replay_a_bad_request_that_is_not_about_the_cache(): void
+    {
+        $http = (new FakeHttpClient())->queue(HttpResponse::make(400, '{"error":{"status":"INVALID_ARGUMENT","message":"Invalid JSON payload received."}}'));
+        $gemini = $this->gemini($http);
+        $request = new LlmRequest('A long persona', 'hi');
+        $fingerprint = (string) (new \ReflectionMethod($gemini, 'prefixFingerprint'))->invoke($gemini, $request);
+        $cached = [$fingerprint => ['name' => 'cachedContents/live', 'expiresAt' => time() + 3600]];
+        (new \ReflectionProperty(GeminiProvider::class, 'cachedPrefixes'))->setValue(null, $cached);
+
+        $response = $gemini->complete($request);
+
+        self::assertSame(LlmFailure::BadRequest, $response->failure);
+        self::assertCount(1, $http->recorded());
+        self::assertSame($cached, (new \ReflectionProperty(GeminiProvider::class, 'cachedPrefixes'))->getValue(), 'the cache is kept');
+    }
+
+    #[Test]
+    public function remote_ollama_without_an_address_is_unconfigured_not_a_network_failure(): void
+    {
+        $http = new FakeHttpClient();
+        $ollama = $this->configure(new RemoteOllamaProvider(), ['baseUrl' => '', 'model' => 'gemma', 'timeout' => 60, 'maxRetries' => 0, 'connectTimeout' => 5, 'http' => $http]);
+
+        self::assertSame(LlmFailure::Unconfigured, $ollama->complete(new LlmRequest('s', 'u'))->failure);
+        self::assertSame([], $http->recorded());
+    }
+
+    #[Test]
     public function gemini_replays_once_and_no_more(): void
     {
         $http = (new FakeHttpClient())->queue(

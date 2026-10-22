@@ -155,6 +155,55 @@ final class FailoverProviderTest extends TestCase
         self::assertInstanceOf(FailoverProvider::class, $chain->withLimits(10, 0, 100, false));
     }
 
+    /** Passed to every member, a 529 was tried three times before the reserve was asked. */
+    #[Test]
+    public function a_caller_s_retries_go_to_the_last_model_only(): void
+    {
+        $chain = $this->chain(new LimitedProvider('anthropic'), new LimitedProvider('gemini'), new LimitedProvider('local'))->withLimits(30, 2);
+
+        self::assertSame([0, 0, 2], array_map(static fn (LimitedProvider $p): ?int => $p->retries, $chain->providers()));
+    }
+
+    /** A caller's three-second budget set a healthy model aside for the patient caller a moment later. */
+    #[Test]
+    public function a_timeout_under_a_caller_s_own_limit_sets_nothing_aside(): void
+    {
+        $claude = new ScriptedProvider([LlmResponse::failed('Operation timed out', LlmFailure::Timeout), 'from claude'], 'anthropic', 'opus');
+        $gemini = new ScriptedProvider(['from gemini'], 'gemini', 'flash');
+        $chain = $this->chain($claude, $gemini);
+
+        $chain->withLimits(3, 0)->complete(self::request());
+        $patient = $chain->complete(self::request());
+
+        self::assertSame('anthropic:opus', $patient->servedBy);
+    }
+
+    /** A drain cancels the call: that says nothing about the model, and the next would be cancelled too. */
+    #[Test]
+    public function a_failure_while_the_worker_drains_sets_nothing_aside_and_asks_no_reserve(): void
+    {
+        $claude = new ScriptedProvider([LlmResponse::failed('Operation canceled', LlmFailure::Network)], 'anthropic', 'opus');
+        $gemini = new ScriptedProvider(['from gemini'], 'gemini', 'flash');
+        \Semitexa\Core\Lifecycle\WorkerDrainSignal::begin();
+        try {
+            $response = $this->chain($claude, $gemini)->complete(self::request());
+        } finally {
+            \Semitexa\Core\Lifecycle\WorkerDrainSignal::reset();
+        }
+
+        self::assertFalse($response->success);
+        self::assertSame([], $gemini->requests);
+        self::assertFalse($this->health->isBenched('anthropic:opus@'));
+    }
+
+    #[Test]
+    public function a_model_that_throws_does_not_keep_the_reserve_from_being_asked(): void
+    {
+        $response = $this->chain(new ThrowingProvider(), new ScriptedProvider(['from gemini'], 'gemini', 'flash'))->complete(self::request());
+
+        self::assertSame('gemini:flash', $response->servedBy);
+    }
+
     private function chain(LlmProviderInterface ...$providers): FailoverProvider
     {
         return new FailoverProvider($providers, $this->health, benchSeconds: 300);
@@ -182,4 +231,36 @@ final class TextOnlyProvider implements LlmProviderInterface
 
         return new LlmResponse('ok', true);
     }
+}
+
+/** Records the retries withLimits() hands it. */
+final class LimitedProvider implements LlmProviderInterface
+{
+    public ?int $retries = null;
+
+    public function __construct(private readonly string $name) {}
+
+    public function withLimits(int $timeoutSeconds, int $maxRetries, ?int $maxTokens = null, bool $thinking = true): self
+    {
+        $clone = clone $this;
+        $clone->retries = $maxRetries;
+
+        return $clone;
+    }
+
+    public function name(): string { return $this->name; }
+    public function baseUrl(): string { return ''; }
+    public function model(): string { return 'm'; }
+    public function healthCheck(): bool { return true; }
+    public function complete(LlmRequest $request): LlmResponse { return new LlmResponse('ok', true); }
+}
+
+/** A custom provider that throws instead of answering a failure. */
+final class ThrowingProvider implements LlmProviderInterface
+{
+    public function name(): string { return 'custom'; }
+    public function baseUrl(): string { return ''; }
+    public function model(): string { return 'x'; }
+    public function healthCheck(): bool { return true; }
+    public function complete(LlmRequest $request): LlmResponse { throw new \TypeError('a malformed tool declaration'); }
 }

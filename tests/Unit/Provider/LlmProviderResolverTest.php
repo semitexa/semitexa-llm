@@ -131,6 +131,23 @@ final class LlmProviderResolverTest extends TestCase
         $this->assertNotSame(0, $this->get($members[1], 'maxRetries'), 'the last one keeps its retries');
     }
 
+    /** The primary repeated as a reserve cost one wasted call per failure, under one set-aside key. */
+    public function test_a_member_named_twice_is_asked_once(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_FALLBACK=gemini, anthropic, gemini');
+
+        $this->assertSame(['gemini', 'anthropic'], $this->resolver()->routeSpecs('chat'));
+    }
+
+    public function test_a_backend_and_its_own_default_model_are_one_member(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_ROUTE_CHAT=gemini,gemini:gemini-3.8-flash');
+
+        $this->assertInstanceOf(GeminiProvider::class, $this->resolver()->route('chat'), 'one model: no chain at all');
+    }
+
     public function test_no_reserves_keeps_the_plain_provider(): void
     {
         putenv('LLM_BACKEND=gemini');
@@ -231,9 +248,14 @@ final class LlmProviderResolverTest extends TestCase
         $this->set($anthropic, 'maxRetries', 2);
         $local = new LocalOllamaProvider();
         $this->set($local, 'model', 'gemma');
+        $remote = new RemoteOllamaProvider();
+        // The address is part of what a route tells members apart by.
+        foreach ([[$gemini, 'https://gemini.test'], [$anthropic, 'https://claude.test'], [$local, 'http://ollama.local'], [$remote, 'http://ollama.remote']] as [$provider, $url]) {
+            $this->set($provider, 'baseUrl', $url);
+        }
 
         $this->set($resolver, 'local', $local);
-        $this->set($resolver, 'remote', new RemoteOllamaProvider());
+        $this->set($resolver, 'remote', $remote);
         $this->set($resolver, 'gemini', $gemini);
         $this->set($resolver, 'anthropic', $anthropic);
 

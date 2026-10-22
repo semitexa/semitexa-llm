@@ -263,11 +263,12 @@ final class GeminiProvider implements LlmProviderInterface, SupportsToolCallingI
         $requestStart = hrtime(true);
         $answer = ProviderHttp::post($this->http(), $url, $this->headers(), $payload, timeout: $this->timeout, connectTimeout: $this->connectTimeout, retries: $this->maxRetries);
 
-        // A non-transient 4xx while referencing a cache usually means the
-        // cachedContents object expired or was deleted upstream — drop it and
-        // replay the same request self-contained, once. The next completion
-        // will recreate the cache.
-        if ($cachedContent !== null && $fingerprint !== null && $answer['status'] >= 400 && $answer['status'] < 500 && $answer['status'] !== 429) {
+        // A 404, or a 400/403 naming the cache, while referencing one means
+        // the cachedContents object expired or was deleted upstream — drop it
+        // and replay the same request self-contained, once. The next
+        // completion will recreate the cache. Any other 4xx is about the
+        // request: replayed, it failed twice and dropped a good cache.
+        if ($cachedContent !== null && $fingerprint !== null && self::cacheIsGone($answer['status'], $answer['body'])) {
             unset(self::$cachedPrefixes[$fingerprint]);
             $this->sharedCacheForget($fingerprint);
             $retryPayload = $this->encodeRequestBody($request, null);
@@ -541,5 +542,11 @@ final class GeminiProvider implements LlmProviderInterface, SupportsToolCallingI
     {
         // Tests build a provider by hand; the container always injects it.
         return isset($this->http) ? $this->http : ($this->http = new CurlHttpClient());
+    }
+
+    private static function cacheIsGone(int $status, string $body): bool
+    {
+        // "CachedContent not found", "Cache content 123 is expired".
+        return $status === 404 || (in_array($status, [400, 403], true) && preg_match('/cache[d\s]*content/i', $body) === 1);
     }
 }

@@ -67,4 +67,14 @@ final class LlmFailureTest extends TestCase
         self::assertFalse($worker1->isBenched('anthropic:' . str_repeat('m', 100)), 'a reset reaches every worker');
         self::assertFalse($worker1->isBenched('x', time()), 'an unknown model is not set aside');
     }
+
+    /** Billing not enabled, a region not served: every call fails the same way. */
+    #[Test]
+    public function gemini_s_failed_precondition_is_a_lasting_misconfiguration(): void
+    {
+        $failure = LlmFailure::fromHttp(400, '', '{"error":{"code":400,"status":"FAILED_PRECONDITION","message":"User location is not supported for the API use."}}');
+
+        self::assertSame(LlmFailure::Unconfigured, $failure);
+        self::assertTrue($failure->isLasting());
+    }
 }

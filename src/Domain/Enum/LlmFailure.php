@@ -124,6 +124,9 @@ enum LlmFailure: string
             // Anthropic answers an empty balance and a reached spend cap with 400.
             str_contains($message, 'credit balance'), str_contains($message, 'usage limits') => self::NoCredit,
             $status === 403 => self::Unauthorized,
+            // Gemini: billing not enabled, a region not served — every call
+            // fails the same way until someone changes the account.
+            $state === 'FAILED_PRECONDITION' => self::Unconfigured,
             default => self::BadRequest,
         };
     }

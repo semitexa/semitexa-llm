@@ -115,6 +115,12 @@ final class RemoteOllamaProvider implements LlmProviderInterface
 
     public function complete(LlmRequest $request): LlmResponse
     {
+        // Without an address curl fails with "no host part": read as a
+        // network failure, the model was set aside for seconds and asked again forever.
+        if (trim($this->baseUrl) === '') {
+            return new LlmResponse(content: '', success: false, error: 'LLM_REMOTE_OLLAMA_URL is not set.', latencyMs: 0, failure: LlmFailure::Unconfigured);
+        }
+
         $messages = [];
 
         if ($request->systemPrompt !== '') {

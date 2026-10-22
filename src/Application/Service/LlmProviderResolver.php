@@ -6,6 +6,7 @@ namespace Semitexa\Llm\Application\Service;
 
 use Semitexa\Core\Attribute\AsService;
 use Semitexa\Core\Attribute\InjectAsReadonly;
+use Semitexa\Core\Attribute\WorkerState;
 use Semitexa\Core\Environment;
 use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Application\Service\Failover\FailoverProvider;
@@ -43,6 +44,10 @@ use Semitexa\Llm\Domain\Enum\LlmBackend;
 #[AsService]
 final class LlmProviderResolver
 {
+    /** @var array<string, true> route and unknown names already warned about, so a typo is logged once per worker, not per call */
+    #[WorkerState('Per-worker set of route typos already logged; only ever grows by the distinct typos in the settings.')]
+    private static array $warnedUnknown = [];
+
     #[InjectAsReadonly]
     protected LocalOllamaProvider $local;
 
@@ -149,17 +154,27 @@ final class LlmProviderResolver
                 $this->logger()?->warning('llm.route_override_failed', ['route' => $name, 'error' => $e->getMessage()]);
             }
         }
-        if ($specs === null || self::parse($specs) === []) {
+        $unknown = [];
+        if ($specs === null || self::parse($specs, $unknown) === []) {
             $env = trim((string) Environment::getEnvValue('LLM_ROUTE_' . strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $name)), ''));
             $specs = $env !== '' ? explode(',', $env) : [];
         }
-        if (self::parse($specs) === []) {
+        if (self::parse($specs, $unknown) === []) {
             $specs = [$this->backend()->value, ...explode(',', (string) Environment::getEnvValue('LLM_FALLBACK', ''))];
+        }
+
+        $members = self::parse($specs, $unknown);
+        $unknown = array_values(array_unique($unknown));
+        // A typo in a route setting, LLM_ROUTE_* or LLM_FALLBACK was dropped without a word.
+        $warning = $name . "\0" . implode(',', $unknown);
+        if ($unknown !== [] && !isset(self::$warnedUnknown[$warning])) {
+            self::$warnedUnknown[$warning] = true;
+            $this->logger()?->warning('llm.route_unknown_backend', ['route' => $name, 'unknown' => $unknown]);
         }
 
         return array_map(
             static fn (array $member): string => $member[0]->value . ($member[1] !== null ? ':' . $member[1] : ''),
-            self::parse($specs),
+            $members,
         );
     }
 
@@ -185,6 +200,14 @@ final class LlmProviderResolver
         foreach ($members as [$backend, $model]) {
             $providers[] = $decider ? $this->decider($backend, $model) : self::switched($this->single($backend), $model);
         }
+        // One model at one address is asked once: `gemini` and
+        // `gemini:<its default model>`, or two models a decider switched to
+        // the same one, were asked twice under one set-aside key.
+        $unique = [];
+        foreach ($providers as $provider) {
+            $unique[FailoverProvider::benchKey($provider)] ??= $provider;
+        }
+        $providers = array_values($unique);
         if (count($providers) === 1) {
             return $providers[0];
         }
@@ -275,23 +298,32 @@ final class LlmProviderResolver
 
     /**
      * `<backend>` or `<backend>:<model>`; an unknown backend is left out
-     * rather than read as `local`, which would quietly answer for it.
+     * rather than read as `local`, which would quietly answer for it, and
+     * named in $unknown. A member named twice is asked once: it is one model
+     * at one address, set aside under one key.
      *
      * @param list<string> $specs
+     * @param list<string> $unknown
+     * @param-out list<string> $unknown
      * @return list<array{LlmBackend, ?string}>
      */
-    private static function parse(array $specs): array
+    private static function parse(array $specs, array &$unknown = []): array
     {
         $members = [];
         foreach ($specs as $spec) {
             [$name, $model] = array_map('trim', explode(':', trim($spec), 2)) + [1 => ''];
-            $backend = LlmBackend::tryFrom(strtolower($name));
-            if ($backend !== null) {
-                $members[] = [$backend, $model !== '' ? $model : null];
+            if ($name === '') {
+                continue;
             }
+            $backend = LlmBackend::tryFrom(strtolower($name));
+            if ($backend === null) {
+                $unknown[] = $name;
+                continue;
+            }
+            $members[$backend->value . ':' . $model] ??= [$backend, $model !== '' ? $model : null];
         }
 
-        return $members;
+        return array_values($members);
     }
 
     /** $provider on $model, when it can switch; as it is otherwise. */

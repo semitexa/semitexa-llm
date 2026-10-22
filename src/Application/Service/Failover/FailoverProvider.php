@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Semitexa\Llm\Application\Service\Failover;
 
+use Semitexa\Core\Lifecycle\WorkerDrainSignal;
 use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Contract\SupportsToolCallingInterface;
+use Semitexa\Llm\Domain\Enum\LlmFailure;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
@@ -44,6 +46,8 @@ final class FailoverProvider implements LlmProviderInterface
         private readonly LlmProviderHealth $health,
         private readonly ?LoggerInterface $logger = null,
         private readonly ?int $benchSeconds = null,
+        /** A caller's own timeout: its timeout says nothing about the model, whose other callers may wait longer. */
+        private readonly bool $callerTimeout = false,
     ) {
         if ($providers === []) {
             throw new \InvalidArgumentException('A FailoverProvider needs at least one provider.');
@@ -59,13 +63,23 @@ final class FailoverProvider implements LlmProviderInterface
 
     /**
      * Every model with these limits, where it takes them: the call that caps
-     * a provider's timeout or tokens caps the whole chain.
+     * a provider's timeout or tokens caps the whole chain. The retries go to
+     * the last model only: the others give up at their first failure, so the
+     * next one is asked at once (passed to all, a 529 was tried three times
+     * before the reserve).
      */
     public function withLimits(int $timeoutSeconds, int $maxRetries, ?int $maxTokens = null, bool $thinking = true): self
     {
-        return $this->mapped(static fn (LlmProviderInterface $p): LlmProviderInterface => method_exists($p, 'withLimits')
-            ? $p->withLimits($timeoutSeconds, $maxRetries, $maxTokens, $thinking)
-            : $p);
+        $last = count($this->providers) - 1;
+        $providers = [];
+        foreach ($this->providers as $i => $provider) {
+            $limited = method_exists($provider, 'withLimits')
+                ? $provider->withLimits($timeoutSeconds, $i === $last ? $maxRetries : 0, $maxTokens, $thinking)
+                : $provider;
+            $providers[] = $limited instanceof LlmProviderInterface ? $limited : $provider;
+        }
+
+        return new self($providers, $this->health, $this->logger, $this->benchSeconds, callerTimeout: true);
     }
 
     /** The first choice on $model; the reserves keep their own (a model id names one vendor's model). */
@@ -82,19 +96,7 @@ final class FailoverProvider implements LlmProviderInterface
         $providers = $this->providers;
         $providers[0] = $switched;
 
-        return new self($providers, $this->health, $this->logger, $this->benchSeconds);
-    }
-
-    /** @param \Closure(LlmProviderInterface): mixed $map */
-    private function mapped(\Closure $map): self
-    {
-        $providers = [];
-        foreach ($this->providers as $provider) {
-            $mapped = $map($provider);
-            $providers[] = $mapped instanceof LlmProviderInterface ? $mapped : $provider;
-        }
-
-        return new self($providers, $this->health, $this->logger, $this->benchSeconds);
+        return new self($providers, $this->health, $this->logger, $this->benchSeconds, $this->callerTimeout);
     }
 
     /** The first choice's name: what is asked for. The answer says what answered. */
@@ -143,7 +145,21 @@ final class FailoverProvider implements LlmProviderInterface
         $last = null;
         foreach ($this->order($request) as $provider) {
             $key = self::key($provider);
-            $response = $provider->complete($request);
+            try {
+                $response = $provider->complete($request);
+            } catch (\Throwable $e) {
+                // A provider is to answer a failure, not throw one; one that
+                // throws must not keep the reserves from being asked.
+                $response = new LlmResponse(content: '', success: false, error: $e::class . ': ' . $e->getMessage(), latencyMs: 0, failure: LlmFailure::Malformed);
+            }
+            // A worker being drained cancels this coroutine's call, which
+            // looks like no answer: that says nothing about the model, and
+            // asking the next one would only be cancelled too. A real answer
+            // (no credit, a 5xx) that came within the drain's grace period
+            // is handled as always.
+            if ($response->failure?->isUnreachable() === true && WorkerDrainSignal::isDraining()) {
+                return $response->withServedBy($key);
+            }
             if ($response->success) {
                 if ($tried !== []) {
                     $this->logger?->info('llm.failover.served', ['by' => $key, 'after' => $tried]);
@@ -154,6 +170,10 @@ final class FailoverProvider implements LlmProviderInterface
 
             $bench = match (true) {
                 $response->failure?->isLasting() === true => $this->benchSeconds ?? LlmProviderHealth::benchSeconds(),
+                // Under a caller's own short timeout a slow answer is that
+                // caller's limit, not the model's: set aside for everyone,
+                // a patient caller a moment later skipped a healthy model.
+                $response->failure === LlmFailure::Timeout && $this->callerTimeout => 0,
                 $response->failure?->isUnreachable() === true => LlmProviderHealth::transientBenchSeconds(),
                 default => 0,
             };
