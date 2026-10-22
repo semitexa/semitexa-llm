@@ -19,20 +19,23 @@ Depends on `semitexa/core` for attribute discovery and the console command syste
 - `#[AsAiSkill]` attribute for skill discovery, `#[AsAiPersona]` for personas
 - `SkillRegistry` builds the manifest from ClassDiscovery
 - Execution policies: `AiExecutionKind`, `AiRiskLevel`, `AiConfirmationMode`
-- Providers: `LocalOllamaProvider`, `RemoteOllamaProvider`, `GeminiProvider`, selected by `LlmProviderResolver`
+- Providers: `LocalOllamaProvider`, `RemoteOllamaProvider`, `GeminiProvider`, `AnthropicProvider`, selected by `LlmProviderResolver`
 - Console: `ai` (interactive assistant), `ai:skills` (list skills), `prompt:eval` (send a prompt to the configured model)
 
 ## Configuration
 
-`LLM_BACKEND` selects the provider: `local` (default), `remote_ollama` or `gemini`. An unset or unknown value falls back to `local`.
+`LLM_BACKEND` selects the provider: `local` (default), `remote_ollama`, `gemini` or `anthropic`. An unset or unknown value falls back to `local`. Code that runs one feature on a different provider than the rest names it: `$resolver->provider(LlmBackend::Anthropic)`.
 
 | Backend | Keys (defaults) |
 |---|---|
 | `local` | `LLM_BASE_URL` (`http://127.0.0.1:11434`), `LLM_MODEL` (`gemma3:4b`), `LLM_TIMEOUT` (60), `LLM_RETRIES` (1), `LLM_CONNECT_TIMEOUT` (5) |
 | `remote_ollama` | `LLM_REMOTE_OLLAMA_URL` (required), `LLM_REMOTE_OLLAMA_MODEL` (`gemma4:e2b`), `LLM_REMOTE_OLLAMA_TIMEOUT` (120), `LLM_REMOTE_OLLAMA_RETRIES` (2), `LLM_REMOTE_OLLAMA_CONNECT_TIMEOUT` (5) |
 | `gemini` | `GEMINI_API_KEY` (a Gemini API key from Google AI Studio), `GEMINI_MODEL` (`gemini-2.5-flash`), `GEMINI_BASE_URL`, `GEMINI_TIMEOUT` (120), `GEMINI_RETRIES` (2), `GEMINI_CONNECT_TIMEOUT` (5), `GEMINI_CONTEXT_CACHE` (off) |
+| `anthropic` | `ANTHROPIC_API_KEY` (a Claude API key from the Claude Console), `ANTHROPIC_MODEL` (`claude-opus-5-5`), `ANTHROPIC_BASE_URL`, `ANTHROPIC_TIMEOUT` (120), `ANTHROPIC_RETRIES` (2), `ANTHROPIC_CONNECT_TIMEOUT` (5), `ANTHROPIC_MAX_TOKENS` (16000), `ANTHROPIC_EFFORT` (model default) |
 
-`LLM_DECIDER_MODEL` (optional) routes silent classification and tool-picking to a cheaper model on the same provider. Only providers that can switch model honour it (Gemini today); on the Ollama backends it is ignored.
+`LLM_DECIDER_MODEL` (optional) routes silent classification and tool-picking to a cheaper model on the same provider. It applies to the `LLM_BACKEND` provider only; `LLM_DECIDER_MODEL_<BACKEND>` (e.g. `LLM_DECIDER_MODEL_ANTHROPIC=claude-haiku-5-5`) sets it for one provider and wins over the plain key. Only providers that can switch model honour it (Gemini and Anthropic); on the Ollama backends it is ignored.
+
+Tool declarations are written once, in the Gemini dialect (`parameters` with `OBJECT`/`STRING`… types); `AnthropicProvider` translates them to JSON Schema. `supportsTools()` says whether a backend takes them.
 
 `LLM_PROVIDER=ollama` is not read by this package: it tells `bin/semitexa server:start` to add the `docker-compose.ollama.yml` overlay, which runs an Ollama container in the project stack and points `LLM_BASE_URL` at it (`http://ollama:11434`).
 

@@ -26,6 +26,8 @@ use Semitexa\Llm\Domain\Model\SkillScope;
  *    because those act on the console and the session, not on site content;
  *  - the module is a PROJECT module mapped to no tenant → the operator only.
  *
+ * Whatever its module, a skill marked `operatorOnly` is the operator's only.
+ *
  * That last rule is the important one. Left as "unmapped means shared" — which
  * reads as the generous, obvious default — a project's own cross-site tooling
  * (server commands, the client registry, anything under src/modules that was
@@ -112,6 +114,10 @@ final class TenantSkillScope
      */
     private function isVisible(string $class, string $tenantId, ModuleRegistry $registry, array $packaged): bool
     {
+        if (self::isOperatorOnly($class)) {
+            return false;
+        }
+
         $module = $registry->getModuleNameForClass($class);
 
         // A skill outside every module is project code with no module to scope
@@ -127,6 +133,43 @@ final class TenantSkillScope
         }
 
         return isset($packaged[$module]);
+    }
+
+    /**
+     * Whether $class is marked `operatorOnly`. Read from the attribute's named
+     * arguments without building it (that resolves its env-driven fields);
+     * only an attribute written with positional arguments is built, and one
+     * that cannot be is hidden: SkillRegistry drops it anyway.
+     *
+     * @param class-string $class
+     */
+    public static function isOperatorOnly(string $class): bool
+    {
+        if (!class_exists($class)) {
+            return false;
+        }
+
+        foreach ((new \ReflectionClass($class))->getAttributes(AsAiSkill::class) as $attribute) {
+            $arguments = $attribute->getArguments();
+            if (array_key_exists('operatorOnly', $arguments)) {
+                if ((bool) $arguments['operatorOnly']) {
+                    return true;
+                }
+                continue;
+            }
+            if (array_filter(array_keys($arguments), 'is_int') === []) {
+                continue;
+            }
+            try {
+                if ($attribute->newInstance()->operatorOnly) {
+                    return true;
+                }
+            } catch (\Throwable) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

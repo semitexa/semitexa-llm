@@ -23,6 +23,13 @@
             "Semitexa\\Llm\\": "src/"
         }
     },
+    "extra": {
+        "semitexa": {
+            "floors": {
+                "semitexa/core": "next"
+            }
+        }
+    },
     "autoload-dev": {
         "psr-4": {
             "Semitexa\\Llm\\Tests\\": "tests/"

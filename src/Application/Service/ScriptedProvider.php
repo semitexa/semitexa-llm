@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Application\Service;
 
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
+use Semitexa\Llm\Domain\Contract\SupportsToolCallingInterface;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
@@ -14,19 +15,25 @@ use Semitexa\Llm\Domain\Model\LlmResponse;
  * (a repair loop shown with a first answer known to be wrong). Every request it
  * received is kept, so a test can read what the model would have been sent.
  */
-final class ScriptedProvider implements LlmProviderInterface
+final class ScriptedProvider implements LlmProviderInterface, SupportsToolCallingInterface
 {
     /** @var list<LlmRequest> */
     public array $requests = [];
 
-    /** @param list<string> $replies */
-    public function __construct(private array $replies)
-    {
+    /**
+     * @param list<string|LlmResponse> $replies a string answers with that text;
+     *        an LlmResponse is returned as it is — a scripted failure, or a tool call
+     */
+    public function __construct(
+        private array $replies,
+        private readonly string $name = 'scripted',
+        private readonly string $model = 'scripted',
+    ) {
     }
 
     public function name(): string
     {
-        return 'scripted';
+        return $this->name;
     }
 
     public function baseUrl(): string
@@ -36,7 +43,7 @@ final class ScriptedProvider implements LlmProviderInterface
 
     public function model(): string
     {
-        return 'scripted';
+        return $this->model;
     }
 
     public function healthCheck(): bool
@@ -49,8 +56,10 @@ final class ScriptedProvider implements LlmProviderInterface
         $this->requests[] = $request;
         $reply = array_shift($this->replies);
 
-        return $reply === null
-            ? new LlmResponse('', false, 'The script has no more replies.')
-            : new LlmResponse($reply, true);
+        return match (true) {
+            $reply === null => new LlmResponse('', false, 'The script has no more replies.'),
+            $reply instanceof LlmResponse => $reply,
+            default => new LlmResponse($reply, true),
+        };
     }
 }
