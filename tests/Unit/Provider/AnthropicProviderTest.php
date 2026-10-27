@@ -129,6 +129,25 @@ final class AnthropicProviderTest extends TestCase
         ], $body['messages']);
     }
 
+    /** A blank new message after the assistant spoke left the assistant last: a prefill, refused with a 400. */
+    public function test_a_blank_message_after_the_assistant_still_ends_with_a_user_turn(): void
+    {
+        $body = $this->body($this->configuredProvider(), new LlmRequest(
+            systemPrompt: 'Persona',
+            userMessage: "  \n",
+            history: [
+                ['role' => 'user', 'content' => 'Lviv, two nights'],
+                ['role' => 'assistant', 'content' => 'Found three.'],
+            ],
+        ));
+
+        $this->assertSame([
+            ['role' => 'user', 'content' => 'Lviv, two nights'],
+            ['role' => 'assistant', 'content' => 'Found three.'],
+            ['role' => 'user', 'content' => '[conversation start]'],
+        ], $body['messages']);
+    }
+
     public function test_gemini_style_tool_declarations_become_json_schema_tools(): void
     {
         $body = $this->body($this->configuredProvider(), new LlmRequest(

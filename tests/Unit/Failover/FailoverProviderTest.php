@@ -152,7 +152,12 @@ final class FailoverProviderTest extends TestCase
         $chain = $this->chain(new ScriptedProvider([], 'anthropic', 'opus'), new TextOnlyProvider())->withModel('haiku');
 
         self::assertSame(['opus', 'gemma'], array_map(static fn ($p) => $p->model(), $chain->providers()), 'ScriptedProvider cannot switch: kept');
-        self::assertInstanceOf(FailoverProvider::class, $chain->withLimits(10, 0, 100, false));
+
+        $text = new TextOnlyProvider();
+        [$limited, $untouched] = $this->chain(new LimitedProvider('anthropic'), $text)->withLimits(10, 1, 100, false)->providers();
+        self::assertInstanceOf(LimitedProvider::class, $limited);
+        self::assertSame([10, 0, 100, false], [$limited->timeout, $limited->retries, $limited->maxTokens, $limited->thinking], 'a reserve stands behind it: no retries');
+        self::assertSame($text, $untouched, 'a member without withLimits() is passed through as it is');
     }
 
     /** Passed to every member, a 529 was tried three times before the reserve was asked. */
@@ -161,7 +166,7 @@ final class FailoverProviderTest extends TestCase
     {
         $chain = $this->chain(new LimitedProvider('anthropic'), new LimitedProvider('gemini'), new LimitedProvider('local'))->withLimits(30, 2);
 
-        self::assertSame([0, 0, 2], array_map(static fn (LimitedProvider $p): ?int => $p->retries, $chain->providers()));
+        self::assertSame([0, 0, 2], array_map(static fn (LlmProviderInterface $p): ?int => $p instanceof LimitedProvider ? $p->retries : null, $chain->providers()));
     }
 
     /** A caller's three-second budget set a healthy model aside for the patient caller a moment later. */
@@ -206,7 +211,7 @@ final class FailoverProviderTest extends TestCase
 
     private function chain(LlmProviderInterface ...$providers): FailoverProvider
     {
-        return new FailoverProvider($providers, $this->health, benchSeconds: 300);
+        return new FailoverProvider(array_values($providers), $this->health, benchSeconds: 300);
     }
 
     private static function request(): LlmRequest
@@ -233,17 +238,23 @@ final class TextOnlyProvider implements LlmProviderInterface
     }
 }
 
-/** Records the retries withLimits() hands it. */
+/** Records the limits withLimits() hands it. */
 final class LimitedProvider implements LlmProviderInterface
 {
+    public ?int $timeout = null;
     public ?int $retries = null;
+    public ?int $maxTokens = null;
+    public ?bool $thinking = null;
 
     public function __construct(private readonly string $name) {}
 
     public function withLimits(int $timeoutSeconds, int $maxRetries, ?int $maxTokens = null, bool $thinking = true): self
     {
         $clone = clone $this;
+        $clone->timeout = $timeoutSeconds;
         $clone->retries = $maxRetries;
+        $clone->maxTokens = $maxTokens;
+        $clone->thinking = $thinking;
 
         return $clone;
     }

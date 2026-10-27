@@ -70,13 +70,14 @@ final class LlmProviderHealth
         }
         $until = ($now ?? time()) + $seconds;
         $id = self::id($key);
-        if ($this->table !== null) {
-            if (!@$this->table->set($id, ['until' => $until])) {
+        $table = $this->table;
+        if ($table !== null) {
+            if (!@$table->set($id, ['until' => $until])) {
                 // Full: drop what has expired and try once more. Still full,
                 // the bench is forgotten — the model is asked as before,
                 // never wrongly skipped.
                 $this->sweep($now ?? time());
-                @$this->table->set($id, ['until' => $until]);
+                @$table->set($id, ['until' => $until]);
             }
 
             return;

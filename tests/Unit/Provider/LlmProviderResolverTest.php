@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Tests\Unit\Provider;
 
 use PHPUnit\Framework\TestCase;
+use Semitexa\Core\Log\LoggerInterface;
 use Semitexa\Llm\Application\Service\AnthropicProvider;
 use Semitexa\Llm\Application\Service\GeminiProvider;
 use Semitexa\Llm\Application\Service\LlmProviderResolver;
@@ -24,18 +25,31 @@ final class LlmProviderResolverTest extends TestCase
 {
     private const ENV = ['LLM_BACKEND', 'LLM_DECIDER_MODEL', 'LLM_DECIDER_MODEL_ANTHROPIC', 'LLM_DECIDER_MODEL_GEMINI', 'LLM_FALLBACK', 'LLM_ROUTE_CHAT', 'LLM_ROUTE_POSTS'];
 
+    /** @var array<string, string|false> what the process had before, put back after: the environment is global */
+    private array $savedEnv = [];
+
+    /** @var array<string, true> the resolver's once-per-worker warnings, static: put back after */
+    private array $savedWarned = [];
+
     protected function setUp(): void
     {
         foreach (self::ENV as $key) {
+            $this->savedEnv[$key] = getenv($key);
             putenv($key);
         }
+        $warned = new \ReflectionProperty(LlmProviderResolver::class, 'warnedUnknown');
+        /** @var array<string, true> $saved */
+        $saved = $warned->getValue();
+        $this->savedWarned = $saved;
+        $warned->setValue(null, []);
     }
 
     protected function tearDown(): void
     {
-        foreach (self::ENV as $key) {
-            putenv($key);
+        foreach ($this->savedEnv as $key => $value) {
+            putenv($value === false ? $key : $key . '=' . $value);
         }
+        (new \ReflectionProperty(LlmProviderResolver::class, 'warnedUnknown'))->setValue(null, $this->savedWarned);
     }
 
     public function test_an_explicit_backend_wins_over_the_env_one(): void
@@ -225,6 +239,36 @@ final class LlmProviderResolverTest extends TestCase
         putenv('LLM_ROUTE_CHAT=local,remote_ollama');
 
         $this->assertFalse($this->resolver()->routeSupportsTools('chat'));
+    }
+
+    /** `local:<model>` was listed as honoured while Ollama answered on its own model: said once per worker. */
+    public function test_a_model_the_provider_cannot_switch_to_is_warned_about_once(): void
+    {
+        putenv('LLM_BACKEND=gemini');
+        putenv('LLM_ROUTE_CHAT=gemini:gemini-3.8-flash,local:llama3.2:1b');
+        $logger = new class implements LoggerInterface {
+            /** @var list<array{0: string, 1: array<string, mixed>}> */
+            public array $warnings = [];
+
+            public function error(string $message, array $context = []): void {}
+            public function critical(string $message, array $context = []): void {}
+            public function warning(string $message, array $context = []): void { $this->warnings[] = [$message, $context]; }
+            public function info(string $message, array $context = []): void {}
+            public function notice(string $message, array $context = []): void {}
+            public function debug(string $message, array $context = []): void {}
+        };
+        $resolver = $this->resolver();
+        $this->set($resolver, 'logger', $logger);
+
+        $route = $resolver->route('chat');
+        $resolver->route('chat');
+        $resolver->deciderRoute('chat');
+
+        $this->assertInstanceOf(FailoverProvider::class, $route);
+        $this->assertSame(['gemini-3.8-flash', 'gemma'], array_map(static fn ($p) => $p->model(), $route->providers()));
+        $this->assertSame([
+            ['llm.route_model_ignored', ['backend' => 'local', 'asked' => 'llama3.2:1b', 'used' => 'gemma']],
+        ], $logger->warnings);
     }
 
     public function test_the_test_seam_answers_every_route(): void

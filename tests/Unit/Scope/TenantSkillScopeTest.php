@@ -102,6 +102,9 @@ final class TenantSkillScopeTest extends TestCase
     #[Test]
     public function no_tenant_receives_an_operator_only_skill_the_operator_does(): void
     {
+        // Both fixtures sit in this package's module, which every tenant gets:
+        // the everybody skill is the control, so a scope that hands the tenant
+        // nothing at all cannot pass.
         $discovery = new class extends ClassDiscovery {
             public function findClassesWithAttribute(string $attributeClass): array
             {
@@ -110,8 +113,8 @@ final class TenantSkillScopeTest extends TestCase
         };
         $scope = new TenantSkillScope();
 
-        self::assertContains(OperatorOnlySkillFixture::class, $scope->classesFor(SkillScope::unrestricted(), $discovery));
-        self::assertNotContains(OperatorOnlySkillFixture::class, $scope->classesFor(SkillScope::forTenant('museum'), $discovery));
+        self::assertSame([OperatorOnlySkillFixture::class, EverybodysSkillFixture::class], $scope->classesFor(SkillScope::unrestricted(), $discovery));
+        self::assertSame([EverybodysSkillFixture::class], $scope->classesFor(SkillScope::forTenant('museum'), $discovery));
     }
 }
 

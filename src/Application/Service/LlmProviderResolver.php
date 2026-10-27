@@ -44,8 +44,8 @@ use Semitexa\Llm\Domain\Enum\LlmBackend;
 #[AsService]
 final class LlmProviderResolver
 {
-    /** @var array<string, true> route and unknown names already warned about, so a typo is logged once per worker, not per call */
-    #[WorkerState('Per-worker set of route typos already logged; only ever grows by the distinct typos in the settings.')]
+    /** @var array<string, true> route and unknown names, and models a provider could not switch to, already warned about: logged once per worker, not per call */
+    #[WorkerState('Per-worker set of route typos and ignored models already logged; only ever grows by the distinct entries in the settings.')]
     private static array $warnedUnknown = [];
 
     #[InjectAsReadonly]
@@ -151,6 +151,10 @@ final class LlmProviderResolver
                 $specs = $this->routeOverride->members($name);
             } catch (\Throwable $e) {
                 // A setting that cannot be read must not silence the feature.
+                // What that hides: the administrator's chosen models are
+                // ignored and the env route serves instead, a bug in the
+                // override (a TypeError) included; this warning is the only
+                // sign of it, and without a logger there is none.
                 $this->logger()?->warning('llm.route_override_failed', ['route' => $name, 'error' => $e->getMessage()]);
             }
         }
@@ -198,7 +202,20 @@ final class LlmProviderResolver
         }
         $providers = [];
         foreach ($members as [$backend, $model]) {
-            $providers[] = $decider ? $this->decider($backend, $model) : self::switched($this->single($backend), $model);
+            if ($decider) {
+                $providers[] = $this->decider($backend, $model);
+                continue;
+            }
+            $provider = self::switched($this->single($backend), $model);
+            // `local:<model>` or `remote_ollama:<model>` read as honoured while
+            // the provider, which cannot switch, answered on its own model.
+            // A decider may replace the spec's model on purpose: not warned.
+            $warning = "model\0" . $backend->value . "\0" . (string) $model;
+            if ($model !== null && $provider->model() !== $model && !isset(self::$warnedUnknown[$warning])) {
+                self::$warnedUnknown[$warning] = true;
+                $this->logger()?->warning('llm.route_model_ignored', ['backend' => $backend->value, 'asked' => $model, 'used' => $provider->model()]);
+            }
+            $providers[] = $provider;
         }
         // One model at one address is asked once: `gemini` and
         // `gemini:<its default model>`, or two models a decider switched to

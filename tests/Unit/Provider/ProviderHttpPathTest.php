@@ -24,10 +24,23 @@ use Semitexa\Llm\Domain\Model\LlmRequest;
  */
 final class ProviderHttpPathTest extends TestCase
 {
+    /** @var array<string, mixed> Gemini's per-worker caches as they were before: static, so shared with every other test */
+    private array $geminiStatics = [];
+
+    protected function setUp(): void
+    {
+        foreach (['cachedPrefixes', 'cacheRefusals'] as $name) {
+            $property = new \ReflectionProperty(GeminiProvider::class, $name);
+            $this->geminiStatics[$name] = $property->getValue();
+            $property->setValue(null, []);
+        }
+    }
+
     protected function tearDown(): void
     {
-        (new \ReflectionProperty(GeminiProvider::class, 'cachedPrefixes'))->setValue(null, []);
-        (new \ReflectionProperty(GeminiProvider::class, 'cacheRefusals'))->setValue(null, []);
+        foreach ($this->geminiStatics as $name => $value) {
+            (new \ReflectionProperty(GeminiProvider::class, $name))->setValue(null, $value);
+        }
     }
 
     #[Test]
@@ -100,6 +113,8 @@ final class ProviderHttpPathTest extends TestCase
         self::assertTrue($response->success, (string) $response->error);
         [$first, $second] = $http->recorded();
         self::assertStringContainsString('cachedContents/gone', $first->body);
+        self::assertStringContainsString('A long persona', $second->body, 'the replay carries the prefix itself');
+        self::assertStringContainsString('"text":"hi"', $second->body);
         self::assertStringNotContainsString('cachedContents/gone', $second->body, 'replayed self-contained');
         self::assertSame('k', $second->header('x-goog-api-key'));
         self::assertSame([], (new \ReflectionProperty(GeminiProvider::class, 'cachedPrefixes'))->getValue(), 'the dead entry is dropped');

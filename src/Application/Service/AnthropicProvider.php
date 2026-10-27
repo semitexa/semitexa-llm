@@ -277,7 +277,10 @@ final class AnthropicProvider implements LlmProviderInterface, SupportsToolCalli
      * blocks and a conversation that opens with the assistant, while callers'
      * histories may hold both (a greeting the assistant sent first, a blank turn),
      * so empty turns are dropped, same-role neighbours are joined, and an opening
-     * assistant turn gets a placeholder user turn in front of it.
+     * assistant turn gets a placeholder user turn in front of it. A blank new
+     * message after an assistant turn would leave the assistant last, which Claude
+     * reads as a prefill — refused with a 400 by the models that no longer take
+     * one — so a placeholder user turn closes the conversation too.
      *
      * @return list<array{role: string, content: string}>
      */
@@ -307,6 +310,9 @@ final class AnthropicProvider implements LlmProviderInterface, SupportsToolCalli
 
         if ($messages === [] || $messages[0]['role'] !== 'user') {
             array_unshift($messages, ['role' => 'user', 'content' => self::CONVERSATION_START]);
+        }
+        if ($messages[array_key_last($messages)]['role'] !== 'user') {
+            $messages[] = ['role' => 'user', 'content' => self::CONVERSATION_START];
         }
 
         return $messages;
