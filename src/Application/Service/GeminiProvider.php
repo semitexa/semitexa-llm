@@ -8,8 +8,13 @@ use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Core\Attribute\Config;
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
+use Semitexa\Core\Http\Client\CurlHttpClient;
+use Semitexa\Core\Http\Client\HttpClientInterface;
+use Semitexa\Llm\Application\Service\Http\ProviderHttp;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
+use Semitexa\Llm\Domain\Contract\SupportsToolCallingInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
+use Semitexa\Llm\Domain\Enum\LlmFailure;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
@@ -51,7 +56,7 @@ use Semitexa\Llm\Domain\Model\LlmResponse;
  *   gracefully to the uncached path.
  */
 #[SatisfiesServiceContract(of: LlmProviderInterface::class, factoryKey: LlmBackend::Gemini)]
-final class GeminiProvider implements LlmProviderInterface
+final class GeminiProvider implements LlmProviderInterface, SupportsToolCallingInterface
 {
     #[Config(env: 'GEMINI_API_KEY', default: '')]
     protected string $apiKey;
@@ -67,6 +72,9 @@ final class GeminiProvider implements LlmProviderInterface
 
     #[Config(env: 'GEMINI_RETRIES', default: 2)]
     protected int $maxRetries;
+
+    #[InjectAsReadonly]
+    protected HttpClientInterface $http;
 
     /**
      * Connect phase only — see the note on {@see LocalOllamaProvider::$connectTimeout}.
@@ -135,6 +143,18 @@ final class GeminiProvider implements LlmProviderInterface
     /** Reuse a cache only while it has at least this long left to live. */
     private const CACHE_EXPIRY_MARGIN_S = 30;
 
+    /**
+     * Gives up after the first failure: a model with a reserve behind it hands
+     * over at once instead of retrying (FailoverProvider, LlmProviderResolver::route()).
+     */
+    public function withoutRetries(): self
+    {
+        $c = clone $this;
+        $c->maxRetries = 0;
+
+        return $c;
+    }
+
     public function name(): string
     {
         return 'gemini';
@@ -193,22 +213,12 @@ final class GeminiProvider implements LlmProviderInterface
             return false;
         }
 
-        $ch = curl_init($this->baseUrl . '/models/' . rawurlencode($this->model));
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => ['x-goog-api-key: ' . $this->apiKey],
-            CURLOPT_TIMEOUT => 5,
-            CURLOPT_CONNECTTIMEOUT => 3,
-        ]);
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($response === false || $httpCode !== 200) {
+        $answer = ProviderHttp::get($this->http(), $this->baseUrl . '/models/' . rawurlencode($this->model), $this->headers(), timeout: 5, connectTimeout: 3);
+        if ($answer['status'] !== 200) {
             return false;
         }
 
-        $decoded = json_decode($response, true);
+        $decoded = json_decode($answer['body'], true);
 
         return is_array($decoded) && isset($decoded['name']);
     }
@@ -220,6 +230,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'GEMINI_API_KEY is not configured',
+                failure: LlmFailure::Unconfigured,
                 latencyMs: 0,
             );
         }
@@ -241,74 +252,44 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Failed to encode request: ' . json_last_error_msg(),
+                failure: LlmFailure::BadRequest,
                 latencyMs: 0,
             );
         }
 
         $url = $this->baseUrl . '/models/' . rawurlencode($this->model) . ':generateContent';
 
-        $attempts = 0;
+        // 429 and 5xx are retried (ProviderHttp); 4xx auth and quota errors are not.
         $requestStart = hrtime(true);
-        $maxAttempts = max(1, $this->maxRetries + 1);
+        $answer = ProviderHttp::post($this->http(), $url, $this->headers(), $payload, timeout: $this->timeout, connectTimeout: $this->connectTimeout, retries: $this->maxRetries);
 
-        while (true) {
-            $attempts++;
-
-            $ch = curl_init($url);
-            curl_setopt_array($ch, [
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => $payload,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_HTTPHEADER => [
-                    'Content-Type: application/json',
-                    'x-goog-api-key: ' . $this->apiKey,
-                ],
-                CURLOPT_TIMEOUT => $this->timeout,
-                CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
-            ]);
-
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            curl_close($ch);
-
-            // A non-transient 4xx while referencing a cache usually means the
-            // cachedContents object expired or was deleted upstream — drop it
-            // and replay the same request self-contained (one extra attempt at
-            // most, since $cachedContent is now null). The next completion will
-            // recreate the cache.
-            if ($cachedContent !== null && $response !== false && $httpCode >= 400 && $httpCode < 500 && $httpCode !== 429) {
-                unset(self::$cachedPrefixes[$fingerprint]);
-                $this->sharedCacheForget($fingerprint);
-                $cachedContent = null;
-                $retryPayload = $this->encodeRequestBody($request, null);
-                if ($retryPayload !== null) {
-                    $payload = $retryPayload;
-                    continue;
-                }
+        // A 404, or a 400/403 naming the cache, while referencing one means
+        // the cachedContents object expired or was deleted upstream — drop it
+        // and replay the same request self-contained, once. The next
+        // completion will recreate the cache. Any other 4xx is about the
+        // request: replayed, it failed twice and dropped a good cache.
+        if ($cachedContent !== null && $fingerprint !== null && self::cacheIsGone($answer['status'], $answer['body'])) {
+            unset(self::$cachedPrefixes[$fingerprint]);
+            $this->sharedCacheForget($fingerprint);
+            $retryPayload = $this->encodeRequestBody($request, null);
+            if ($retryPayload !== null) {
+                $answer = ProviderHttp::post($this->http(), $url, $this->headers(), $retryPayload, timeout: $this->timeout, connectTimeout: $this->connectTimeout, retries: $this->maxRetries);
             }
+        }
 
-            // 429 (rate limit) and 5xx are transient; 4xx auth/quota errors are not.
-            $isTransientFailure = $response === false || $httpCode >= 500 || $httpCode === 429;
+        $latencyMs = (hrtime(true) - $requestStart) / 1_000_000;
+        $response = $answer['body'];
 
-            if ($isTransientFailure && $attempts < $maxAttempts) {
-                usleep($attempts * 500_000); // 0.5s, 1s, 1.5s backoff
-                continue;
-            }
+        if ($answer['status'] !== 200) {
+            $detail = $response !== '' ? ': ' . substr($response, 0, 300) : '';
 
-            $latencyMs = (hrtime(true) - $requestStart) / 1_000_000;
-
-            if ($response === false || $httpCode !== 200) {
-                $detail = is_string($response) && $response !== '' ? ': ' . substr($response, 0, 300) : '';
-                return new LlmResponse(
-                    content: '',
-                    success: false,
-                    error: $curlError !== '' ? $curlError : "HTTP {$httpCode}{$detail}",
-                    latencyMs: $latencyMs,
-                );
-            }
-
-            break;
+            return new LlmResponse(
+                content: '',
+                success: false,
+                error: $answer['error'] !== '' ? $answer['error'] : "HTTP {$answer['status']}{$detail}",
+                failure: $answer['failure'] ?? LlmFailure::fromHttp($answer['status'], '', $response),
+                latencyMs: $latencyMs,
+            );
         }
 
         $decoded = json_decode($response, true);
@@ -317,6 +298,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Invalid response structure from Gemini',
+                failure: LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }
@@ -327,6 +309,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Prompt blocked by Gemini: ' . (string) $decoded['promptFeedback']['blockReason'],
+                failure: LlmFailure::Refused,
                 latencyMs: $latencyMs,
             );
         }
@@ -338,6 +321,7 @@ final class GeminiProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Gemini returned no content (finishReason: ' . (string) $finishReason . ')',
+                failure: in_array($finishReason, ['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII'], true) ? LlmFailure::Refused : LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }
@@ -495,26 +479,13 @@ final class GeminiProvider implements LlmProviderInterface
             return null;
         }
 
-        $ch = curl_init($this->baseUrl . '/cachedContents');
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json',
-                'x-goog-api-key: ' . $this->apiKey,
-            ],
-            CURLOPT_TIMEOUT => min($this->timeout, 20),
-            CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
-        ]);
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        // One attempt: a cache that cannot be made is only a missed saving.
+        $answer = ProviderHttp::post($this->http(), $this->baseUrl . '/cachedContents', $this->headers(), $payload, timeout: min($this->timeout, 20), connectTimeout: $this->connectTimeout, retries: 0);
 
-        $decoded = is_string($response) ? json_decode($response, true) : null;
+        $decoded = $answer['status'] === 200 ? json_decode($answer['body'], true) : null;
         $name = is_array($decoded) && isset($decoded['name']) && is_string($decoded['name']) ? $decoded['name'] : null;
 
-        if ($httpCode !== 200 || $name === null) {
+        if ($name === null) {
             self::$cacheRefusals[$fingerprint] = $now + self::CACHE_REFUSAL_BACKOFF_S;
 
             return null;
@@ -559,5 +530,23 @@ final class GeminiProvider implements LlmProviderInterface
         if (isset($this->cache)) {
             $this->cache->forget($this->sharedCacheKey($fingerprint));
         }
+    }
+
+    /** @return array<string, string> */
+    private function headers(): array
+    {
+        return ['x-goog-api-key' => $this->apiKey];
+    }
+
+    private function http(): HttpClientInterface
+    {
+        // Tests build a provider by hand; the container always injects it.
+        return isset($this->http) ? $this->http : ($this->http = new CurlHttpClient());
+    }
+
+    private static function cacheIsGone(int $status, string $body): bool
+    {
+        // "CachedContent not found", "Cache content 123 is expired".
+        return $status === 404 || (in_array($status, [400, 403], true) && preg_match('/cache[d\s]*content/i', $body) === 1);
     }
 }

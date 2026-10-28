@@ -9,6 +9,11 @@ use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\ModuleRegistry;
 use Semitexa\Llm\Application\Service\TenantSkillScope;
+use Semitexa\Llm\Attribute\AsAiSkill;
+use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
+use Semitexa\Llm\Domain\Enum\AiConfirmationMode;
+use Semitexa\Llm\Domain\Enum\AiExecutionKind;
+use Semitexa\Llm\Domain\Enum\AiRiskLevel;
 use Semitexa\Llm\Domain\Model\SkillScope;
 
 /**
@@ -84,4 +89,51 @@ final class TenantSkillScopeTest extends TestCase
 
         self::assertNotSame([], $packaged);
     }
+
+    #[Test]
+    public function operator_only_is_read_however_the_attribute_was_written(): void
+    {
+        self::assertTrue(TenantSkillScope::isOperatorOnly(OperatorOnlySkillFixture::class));
+        self::assertTrue(TenantSkillScope::isOperatorOnly(PositionalOperatorOnlySkillFixture::class), 'a positional true is not missed');
+        self::assertFalse(TenantSkillScope::isOperatorOnly(EverybodysSkillFixture::class));
+        self::assertFalse(TenantSkillScope::isOperatorOnly(ExplicitlyEverybodysSkillFixture::class));
+    }
+
+    #[Test]
+    public function no_tenant_receives_an_operator_only_skill_the_operator_does(): void
+    {
+        // Both fixtures sit in this package's module, which every tenant gets:
+        // the everybody skill is the control, so a scope that hands the tenant
+        // nothing at all cannot pass.
+        $discovery = new class extends ClassDiscovery {
+            public function findClassesWithAttribute(string $attributeClass): array
+            {
+                return [OperatorOnlySkillFixture::class, EverybodysSkillFixture::class];
+            }
+        };
+        $scope = new TenantSkillScope();
+
+        self::assertSame([OperatorOnlySkillFixture::class, EverybodysSkillFixture::class], $scope->classesFor(SkillScope::unrestricted(), $discovery));
+        self::assertSame([EverybodysSkillFixture::class], $scope->classesFor(SkillScope::forTenant('museum'), $discovery));
+    }
+}
+
+#[AsAiSkill(name: 'fixture-operator', channels: ['ui'], operatorOnly: true)]
+final class OperatorOnlySkillFixture
+{
+}
+
+#[AsAiSkill(true, 'positional', null, null, AiRiskLevel::Low, AiConfirmationMode::Never, false, AiArgumentPolicy::None, [], [], AiExecutionKind::DirectCommand, ['ui'], 'fixture-positional', null, null, [], true)]
+final class PositionalOperatorOnlySkillFixture
+{
+}
+
+#[AsAiSkill(name: 'fixture-everybody', channels: ['ui'])]
+final class EverybodysSkillFixture
+{
+}
+
+#[AsAiSkill(name: 'fixture-everybody-explicit', channels: ['ui'], operatorOnly: false)]
+final class ExplicitlyEverybodysSkillFixture
+{
 }

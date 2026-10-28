@@ -88,6 +88,23 @@ final readonly class ScopedSkillManifest
     }
 
     /**
+     * Without the skills $refused says no to. Never widens. For a surface
+     * that knows more than the scope does: the OS leaves out a window the
+     * signed-in role would be refused.
+     *
+     * @param \Closure(SkillEntry): bool $refused
+     */
+    public function without(\Closure $refused): self
+    {
+        return new self(new SkillManifest(
+            $this->manifest->artifact,
+            $this->manifest->generatedAt,
+            array_values(array_filter($this->manifest->skills, static fn (SkillEntry $s): bool => !$refused($s))),
+            $this->manifest->channels,
+        ), $this->channels);
+    }
+
+    /**
      * Narrow further. Never widens: the result is the intersection.
      *
      * The incoming names are normalised the same way the constructor does them,

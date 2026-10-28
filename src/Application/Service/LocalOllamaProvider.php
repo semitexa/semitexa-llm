@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Application\Service;
 
 use Semitexa\Core\Attribute\Config;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
+use Semitexa\Core\Http\Client\CurlHttpClient;
+use Semitexa\Core\Http\Client\HttpClientInterface;
+use Semitexa\Llm\Application\Service\Http\ProviderHttp;
 use Semitexa\Llm\Domain\Contract\LlmProviderInterface;
 use Semitexa\Llm\Domain\Enum\LlmBackend;
+use Semitexa\Llm\Domain\Enum\LlmFailure;
 use Semitexa\Llm\Domain\Model\LlmRequest;
 use Semitexa\Llm\Domain\Model\LlmResponse;
 
@@ -26,6 +31,9 @@ final class LocalOllamaProvider implements LlmProviderInterface
     #[Config(env: 'LLM_RETRIES', default: 1)]
     protected int $maxRetries;
 
+    #[InjectAsReadonly]
+    protected HttpClientInterface $http;
+
     /**
      * The connect phase only — how long to wait for the TCP handshake, separate from
      * {@see $timeout}, which budgets generation and has to stay generous for a slow
@@ -38,6 +46,18 @@ final class LocalOllamaProvider implements LlmProviderInterface
      */
     #[Config(env: 'LLM_CONNECT_TIMEOUT', default: 5)]
     protected int $connectTimeout;
+
+    /**
+     * Gives up after the first failure: a model with a reserve behind it hands
+     * over at once instead of retrying (FailoverProvider, LlmProviderResolver::route()).
+     */
+    public function withoutRetries(): self
+    {
+        $c = clone $this;
+        $c->maxRetries = 0;
+
+        return $c;
+    }
 
     public function name(): string
     {
@@ -56,19 +76,11 @@ final class LocalOllamaProvider implements LlmProviderInterface
 
     public function healthCheck(): bool
     {
-        $ch = curl_init($this->baseUrl . '/api/tags');
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 5,
-            CURLOPT_CONNECTTIMEOUT => 3,
-        ]);
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($response === false || $httpCode !== 200) {
+        $answer = ProviderHttp::get($this->http(), $this->baseUrl . '/api/tags', [], timeout: 5, connectTimeout: 3);
+        if ($answer['status'] !== 200) {
             return false;
         }
+        $response = $answer['body'];
 
         $decoded = json_decode($response, true);
         if (!is_array($decoded) || !isset($decoded['models'])) {
@@ -106,52 +118,27 @@ final class LocalOllamaProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Failed to encode request: ' . json_last_error_msg(),
+                failure: LlmFailure::BadRequest,
                 latencyMs: 0,
             );
         }
 
-        $attempts = 0;
+        // A connection that failed, a 429 and a 5xx are retried (ProviderHttp).
         $requestStart = hrtime(true);
-        $maxAttempts = max(1, $this->maxRetries + 1);
+        $answer = ProviderHttp::post($this->http(), $this->baseUrl . '/api/chat', [], $payload, timeout: $this->timeout, connectTimeout: $this->connectTimeout, retries: $this->maxRetries);
+        $latencyMs = (hrtime(true) - $requestStart) / 1_000_000;
+        $response = $answer['body'];
 
-        while (true) {
-            $attempts++;
+        if ($answer['status'] !== 200) {
+            $detail = $response !== '' ? ': ' . substr($response, 0, 300) : '';
 
-            $ch = curl_init($this->baseUrl . '/api/chat');
-            curl_setopt_array($ch, [
-                CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => $payload,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-                CURLOPT_TIMEOUT => $this->timeout,
-                CURLOPT_CONNECTTIMEOUT => $this->connectTimeout,
-            ]);
-
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            curl_close($ch);
-
-            $isTransientFailure = $response === false || $httpCode >= 500;
-
-            if ($isTransientFailure && $attempts < $maxAttempts) {
-                usleep($attempts * 500_000); // 0.5s, 1s, 1.5s backoff
-                continue;
-            }
-
-            $latencyMs = (hrtime(true) - $requestStart) / 1_000_000;
-
-            if ($response === false || $httpCode !== 200) {
-                $detail = is_string($response) && $response !== '' ? ': ' . substr($response, 0, 300) : '';
-                return new LlmResponse(
-                    content: '',
-                    success: false,
-                    error: $curlError !== '' ? $curlError : "HTTP {$httpCode}{$detail}",
-                    latencyMs: $latencyMs,
-                );
-            }
-
-            break;
+            return new LlmResponse(
+                content: '',
+                success: false,
+                error: $answer['error'] !== '' ? $answer['error'] : "HTTP {$answer['status']}{$detail}",
+                failure: $answer['failure'] ?? LlmFailure::fromHttp($answer['status'], '', $response),
+                latencyMs: $latencyMs,
+            );
         }
 
         $decoded = json_decode($response, true);
@@ -160,6 +147,7 @@ final class LocalOllamaProvider implements LlmProviderInterface
                 content: '',
                 success: false,
                 error: 'Invalid response structure from Ollama',
+                failure: LlmFailure::Malformed,
                 latencyMs: $latencyMs,
             );
         }
@@ -175,5 +163,11 @@ final class LocalOllamaProvider implements LlmProviderInterface
             tokensUsed: $tokensUsed,
             latencyMs: $latencyMs,
         );
+    }
+
+    private function http(): HttpClientInterface
+    {
+        // Tests build a provider by hand; the container always injects it.
+        return isset($this->http) ? $this->http : ($this->http = new CurlHttpClient());
     }
 }
