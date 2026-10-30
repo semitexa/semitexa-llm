@@ -83,9 +83,15 @@ final class TenantSkillScopeTest extends TestCase
         // exist depends on the install (a bare one has none a tenant may use:
         // the stack smoke failed on asserting "some" there), so the rule is
         // pinned instead: every skill of a packaged module, not operator-only and
-        // mapped to no tenant, is kept.
+        // mapped to no tenant, is kept. One such skill is added to what this
+        // install discovers, so the rule is exercised even where it has none.
         $scope = new TenantSkillScope();
-        $discovery = new ClassDiscovery();
+        $discovery = new class extends ClassDiscovery {
+            public function findClassesWithAttribute(string $attributeClass): array
+            {
+                return [...parent::findClassesWithAttribute($attributeClass), EverybodysSkillFixture::class];
+            }
+        };
         $classes = $scope->classesFor(SkillScope::forTenant('a-tenant-that-owns-no-module'), $discovery);
 
         $registry = new ModuleRegistry();
@@ -111,6 +117,7 @@ final class TenantSkillScopeTest extends TestCase
             },
         ));
 
+        self::assertContains(EverybodysSkillFixture::class, $consoles, 'the added skill qualifies, so the comparison below cannot be two empty lists');
         self::assertSame($consoles, array_values(array_intersect($classes, $consoles)));
     }
 
