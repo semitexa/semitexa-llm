@@ -84,7 +84,24 @@ final class TenantSkillScopeTest extends TestCase
         // the stack smoke failed on asserting "some" there), so the rule is
         // pinned instead: every skill of a packaged module, not operator-only and
         // mapped to no tenant, is kept. One such skill is added to what this
-        // install discovers, so the rule is exercised even where it has none.
+        // install discovers, so the rule is exercised even where it has none,
+        // with no TENANT_*_MODULES mapping in force: one naming llm would take
+        // that skill out of the rule. They are put back afterwards.
+        $mappings = array_filter(getenv(), static fn (string $key): bool => preg_match('/^TENANT_[A-Z0-9_]+?_MODULES$/', $key) === 1, ARRAY_FILTER_USE_KEY);
+        foreach (array_keys($mappings) as $key) {
+            putenv($key);
+        }
+        try {
+            $this->assertConsoleSkillsSurvive();
+        } finally {
+            foreach ($mappings as $key => $value) {
+                putenv($key . '=' . $value);
+            }
+        }
+    }
+
+    private function assertConsoleSkillsSurvive(): void
+    {
         $scope = new TenantSkillScope();
         $discovery = new class extends ClassDiscovery {
             public function findClassesWithAttribute(string $attributeClass): array
