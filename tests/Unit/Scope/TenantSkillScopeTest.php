@@ -8,6 +8,7 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Core\Discovery\ClassDiscovery;
 use Semitexa\Core\ModuleRegistry;
+use Semitexa\Core\Support\TenantModuleScopeResolver;
 use Semitexa\Llm\Application\Service\TenantSkillScope;
 use Semitexa\Llm\Attribute\AsAiSkill;
 use Semitexa\Llm\Domain\Enum\AiArgumentPolicy;
@@ -78,16 +79,63 @@ final class TenantSkillScopeTest extends TestCase
     {
         // Notes, calendar, theme, locale and friends act on the console and the
         // session rather than on site content. Filtering them out would leave a
-        // signed-in admin with a shell that can do nothing at all.
+        // signed-in admin with a shell that can do nothing at all. Which ones
+        // exist depends on the install (a bare one has none a tenant may use:
+        // the stack smoke failed on asserting "some" there), so the rule is
+        // pinned instead: every skill of a packaged module, not operator-only and
+        // mapped to no tenant, is kept. One such skill is added to what this
+        // install discovers, so the rule is exercised even where it has none,
+        // with no TENANT_*_MODULES mapping in force: one naming llm would take
+        // that skill out of the rule. They are put back afterwards.
+        $mappings = array_filter(getenv(), static fn (string $key): bool => preg_match('/^TENANT_[A-Z0-9_]+?_MODULES$/', $key) === 1, ARRAY_FILTER_USE_KEY);
+        foreach (array_keys($mappings) as $key) {
+            putenv($key);
+        }
+        try {
+            $this->assertConsoleSkillsSurvive();
+        } finally {
+            foreach ($mappings as $key => $value) {
+                putenv($key . '=' . $value);
+            }
+        }
+    }
+
+    private function assertConsoleSkillsSurvive(): void
+    {
         $scope = new TenantSkillScope();
-        $classes = $scope->classesFor(SkillScope::forTenant('a-tenant-that-owns-no-module'));
+        $discovery = new class extends ClassDiscovery {
+            public function findClassesWithAttribute(string $attributeClass): array
+            {
+                return [...parent::findClassesWithAttribute($attributeClass), EverybodysSkillFixture::class];
+            }
+        };
+        $classes = $scope->classesFor(SkillScope::forTenant('a-tenant-that-owns-no-module'), $discovery);
 
-        $packaged = array_filter(
-            $classes,
-            static fn (string $class): bool => str_starts_with($class, 'Semitexa\\'),
-        );
+        $registry = new ModuleRegistry();
+        $packaged = [];
+        foreach (['vendor', 'composer'] as $type) {
+            foreach ($registry->getModulesByType($type) as $module) {
+                foreach ([$module['name'], ...$module['aliases']] as $name) {
+                    $packaged[(string) $name] = true;
+                }
+            }
+        }
+        /** @var list<class-string> $all */
+        $all = $discovery->findClassesWithAttribute(AsAiSkill::class);
+        $consoles = array_values(array_filter(
+            $all,
+            static function (string $class) use ($registry, $packaged): bool {
+                $module = $registry->getModuleNameForClass($class);
 
-        self::assertNotSame([], $packaged);
+                return !TenantSkillScope::isOperatorOnly($class)
+                    && $module !== null
+                    && isset($packaged[$module])
+                    && TenantModuleScopeResolver::scopesForModule($module) === [];
+            },
+        ));
+
+        self::assertContains(EverybodysSkillFixture::class, $consoles, 'the added skill qualifies, so the comparison below cannot be two empty lists');
+        self::assertSame($consoles, array_values(array_intersect($classes, $consoles)));
     }
 
     #[Test]
