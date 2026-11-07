@@ -280,6 +280,14 @@ final class FakeCacheManager implements \Semitexa\Cache\Domain\Contract\CacheMan
         unset($this->store[$key]);
     }
 
+    public function take(string $key): mixed
+    {
+        $value = $this->store[$key] ?? null;
+        unset($this->store[$key]);
+
+        return $value;
+    }
+
     public function flushTags(string ...$tags): int
     {
         return 0;
