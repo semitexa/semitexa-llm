@@ -288,6 +288,26 @@ final class FakeCacheManager implements \Semitexa\Cache\Domain\Contract\CacheMan
         return $value;
     }
 
+    public function add(string $key, mixed $value, ?int $ttlSeconds = null): bool
+    {
+        if (array_key_exists($key, $this->store)) {
+            return false;
+        }
+        $this->store[$key] = $value;
+
+        return true;
+    }
+
+    public function forgetIf(string $key, mixed $expected): bool
+    {
+        if (!array_key_exists($key, $this->store) || $this->store[$key] !== $expected) {
+            return false;
+        }
+        unset($this->store[$key]);
+
+        return true;
+    }
+
     public function flushTags(string ...$tags): int
     {
         return 0;
