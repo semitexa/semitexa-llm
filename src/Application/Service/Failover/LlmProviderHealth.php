@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Semitexa\Llm\Application\Service\Failover;
 
 use Semitexa\Core\Attribute\AsService;
+use Semitexa\Core\Attribute\WorkerState;
 use Semitexa\Core\Environment;
 use Swoole\Table;
 
@@ -27,6 +28,7 @@ final class LlmProviderHealth
 
     private const ROWS = 256;
 
+    #[WorkerState('Shared Swoole table created in the master before the fork and installed once per worker at start; its rows are keyed by a model hash, never by a request.')]
     private ?Table $table = null;
 
     /** @var array<string, int> key hash → unix time the bench ends */
