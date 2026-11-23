@@ -70,6 +70,7 @@ final class LlmProviderResolver
     protected LlmRouteOverrideInterface $routeOverride;
 
     /** Set only by {@see withProvider()}; null in every production path. */
+    #[WorkerState('Test seam set only by withProvider(); production never calls it and resolves from LLM_BACKEND.')]
     private ?LlmProviderInterface $override = null;
 
     /**
